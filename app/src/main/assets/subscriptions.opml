@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='UTF-8' standalone='no' ?>
+<opml version="2.0">
+  <head>
+    <title>AntennaPod Subscriptions</title>
+    <dateCreated>04 Jul 25 15:58:19 -0700</dateCreated>
+  </head>
+  <body>
+    <outline text="Fox News Radio 1 Minute Newscast" title="Fox News Radio 1 Minute Newscast" type="rss" xmlUrl="https://feeds.megaphone.fm/FOXM9589275261" htmlUrl="https://radio.foxnews.com/" />
+    <outline text="L'info" title="L'info" type="rss" xmlUrl="https://radiofrance-podcast.net/podcast09/35099478-7c72-4f9e-a6de-1b928400e9e5/rss_17258.xml" htmlUrl="http://www.radiofrance.fr/" />
+    <outline text="Le journal RTL" title="Le journal RTL" type="rss" xmlUrl="https://feeds.audiomeans.fr/feed/81fdd41c-51e9-4839-b867-7ad5bfe61dea.xml" htmlUrl="https://www.rtl.fr/emission/le-journal-rtl" />
+    <outline text="NPR News Now" title="NPR News Now" type="rss" xmlUrl="https://feeds.npr.org/500005/podcast.xml" htmlUrl="https://www.npr.org/podcasts/500005/npr-news-now" />
+    <outline text="Sky News" title="Sky News" type="rss" xmlUrl="http://a.365dm.com/api/apple/v1/audio/news-bulletin" htmlUrl="http://a.365dm.com/api/apple/v1/audio/news-bulletin" />
+  </body>
+</opml>
