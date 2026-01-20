@@ -13,7 +13,7 @@
           android:startY="0"
           android:endX="108"
           android:endY="108"
-          android:startColor="#424242"
+          android:startColor="#626262"
           android:endColor="#000000"
           android:type="linear"/>
     </aapt:attr>
