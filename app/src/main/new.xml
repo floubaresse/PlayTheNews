@@ -1,7 +1,0 @@
-<menu xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto">
-    <item android:id="@+id/action_search" android:title="Search for podcasts"
-        android:icon="@drawable/ic_search" app:showAsAction="ifRoom" />
-
-    <item android:id="@+id/action_about" android:title="About" app:showAsAction="never" />
-</menu>
