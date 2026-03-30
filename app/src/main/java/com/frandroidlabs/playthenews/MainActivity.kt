@@ -303,18 +303,21 @@ class MainActivity : AppCompatActivity() {
             val controller = controllerFuture.get()
             player = controller
             playerView.player = controller
-            Log.d(TAG, "onStart: got the player: " + playlist.size)
+            Log.d(TAG, "onStart: got the player, mediaItemCount=${controller.mediaItemCount}")
 
-            if (!isPlaylistInitialized) {
-                updateList(opmlContent)
+            // Re-load the playlist if this is the first connect OR if the service
+            // was killed while dormant and came back with an empty ExoPlayer instance.
+            if (!isPlaylistInitialized || controller.mediaItemCount == 0) {
+                Log.d(TAG, "onStart: (re)initialising playlist")
                 isPlaylistInitialized = true
+                updateList(opmlContent)
             }
 
             playerView.setControllerShowTimeoutMs(0)
             playerView.controllerAutoShow = true
 
             playerView.player?.prepare()
-            Log.d(TAG, "onStart: prepared player: " + playlist.size)
+            Log.d(TAG, "onStart: prepared player")
 
             // Sync highlight from the actual player state on reconnect
             val actualIndex = controller.currentMediaItemIndex
