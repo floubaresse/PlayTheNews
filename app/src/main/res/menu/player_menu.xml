@@ -13,7 +13,10 @@
         android:icon="@android:drawable/ic_menu_edit"
         android:title="Edit"
         app:showAsAction="ifRoom" />
-
+    <item
+        android:id="@+id/action_about"
+        android:title="About"
+        app:showAsAction="never" />
     <item
         android:id="@+id/action_load_opml"
         android:icon="@android:drawable/ic_menu_upload"
