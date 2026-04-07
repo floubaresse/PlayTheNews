@@ -15,7 +15,7 @@
       </SelectionState>
       <SelectionState runConfigName="PlayTheNews.app">
         <option name="selectionMode" value="DROPDOWN" />
-        <DropdownSelection timestamp="2026-01-22T19:29:25.638091400Z">
+        <DropdownSelection timestamp="2026-04-07T02:00:40.562474100Z">
           <Target type="DEFAULT_BOOT">
             <handle>
               <DeviceId pluginId="PhysicalDevice" identifier="serial=21131FDF6001EG" />

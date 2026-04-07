@@ -57,10 +57,9 @@ fun parseOpml(opml: String): List<FeedInfo> {
                 parser.getAttributeValue(null, "title") ?: parser.getAttributeValue(null, "text")
                 ?: "Untitled"
             val xmlUrl = parser.getAttributeValue(null, "xmlUrl")
-            val iconUrl = null
 
             if (!xmlUrl.isNullOrBlank()) {
-                result.add(FeedInfo(title, xmlUrl, iconUrl))
+                result.add(FeedInfo(title, xmlUrl, null))
             }
         }
         eventType = parser.next()
@@ -68,93 +67,80 @@ fun parseOpml(opml: String): List<FeedInfo> {
     return result
 }
 
-suspend fun extractTrackFromRss(rssUrl: String, fallbackTitle: String): Track? = withContext(Dispatchers.IO) {
-    try {
-        val url = URL(rssUrl)
-        val stream = url.openStream()
-        val factory = XmlPullParserFactory.newInstance()
-        factory.isNamespaceAware = true
-        val parser = factory.newPullParser()
-        parser.setInput(stream.reader())
+suspend fun extractTrackFromRss(rssUrl: String, fallbackTitle: String): Track? =
+    withContext(Dispatchers.IO) {
+        try {
+            val url = URL(rssUrl)
+            val stream = url.openStream()
+            val factory = XmlPullParserFactory.newInstance()
+            factory.isNamespaceAware = true
+            val parser = factory.newPullParser()
+            parser.setInput(stream.reader())
 
-        var title: String? = null
-        var enclosureUrl: String? = null
-        var iconInItem: String? = null
-        var channelIcon: String? = null
-        var insideItem = false
-        var insideChannel = false
-        var foundFirstItem = false
-        var eventType = parser.eventType
+            var title: String? = null
+            var enclosureUrl: String? = null
+            var iconInItem: String? = null
+            var channelIcon: String? = null
+            var insideItem = false
+            var insideChannel = false
+            var eventType = parser.eventType
 
-        while (eventType != XmlPullParser.END_DOCUMENT) {
-            when (eventType) {
-                XmlPullParser.START_TAG -> {
-                    when (parser.name) {
-                        "channel" -> insideChannel = true
-                        "item" -> {
-                            insideItem = true
-                        }
-                        "title" -> if (insideItem && title == null) {
-                            title = parser.nextText()
-                        }
-                        "enclosure" -> if (insideItem && enclosureUrl == null) {
-                            val type = parser.getAttributeValue(null, "type")
-                            if (type != null && type.startsWith("audio/")) {
-                                enclosureUrl = parser.getAttributeValue(null, "url")
+            while (eventType != XmlPullParser.END_DOCUMENT) {
+                when (eventType) {
+                    XmlPullParser.START_TAG -> {
+                        when (parser.name) {
+                            "channel" -> insideChannel = true
+                            "item"    -> insideItem = true
+                            "title"   -> if (insideItem && title == null) {
+                                title = parser.nextText()
                             }
-                        }
-                        "itunes:image" -> {
-                            val href = parser.getAttributeValue(null, "href")
-                            if (insideItem && iconInItem == null) {
-                                iconInItem = href
-                            } else if (insideChannel && channelIcon == null) {
-                                channelIcon = href
-                            }
-                        }
-                        "image" -> if (insideChannel && channelIcon == null) {
-                            var imgEvent = parser.next()
-                            while (!(imgEvent == XmlPullParser.END_TAG && parser.name == "image")) {
-                                if (imgEvent == XmlPullParser.START_TAG && parser.name == "url") {
-                                    channelIcon = parser.nextText()
+                            "enclosure" -> if (insideItem && enclosureUrl == null) {
+                                val type = parser.getAttributeValue(null, "type")
+                                if (type != null && type.startsWith("audio/")) {
+                                    enclosureUrl = parser.getAttributeValue(null, "url")
                                 }
-                                imgEvent = parser.next()
                             }
-                        }
-                        "media:thumbnail", "media:content" -> {
-                            val urlAttr = parser.getAttributeValue(null, "url")
-                            if (insideItem && iconInItem == null) {
-                                iconInItem = urlAttr
-                            } else if (insideChannel && channelIcon == null) {
-                                channelIcon = urlAttr
+                            "itunes:image" -> {
+                                val href = parser.getAttributeValue(null, "href")
+                                if (insideItem && iconInItem == null) iconInItem = href
+                                else if (insideChannel && channelIcon == null) channelIcon = href
+                            }
+                            "image" -> if (insideChannel && channelIcon == null) {
+                                var imgEvent = parser.next()
+                                while (!(imgEvent == XmlPullParser.END_TAG && parser.name == "image")) {
+                                    if (imgEvent == XmlPullParser.START_TAG && parser.name == "url") {
+                                        channelIcon = parser.nextText()
+                                    }
+                                    imgEvent = parser.next()
+                                }
+                            }
+                            "media:thumbnail", "media:content" -> {
+                                val urlAttr = parser.getAttributeValue(null, "url")
+                                if (insideItem && iconInItem == null) iconInItem = urlAttr
+                                else if (insideChannel && channelIcon == null) channelIcon = urlAttr
                             }
                         }
                     }
-                }
-                XmlPullParser.END_TAG -> {
-                    if (parser.name == "item" && insideItem) {
-                        foundFirstItem = true
-                        break
+                    XmlPullParser.END_TAG -> {
+                        if (parser.name == "item" && insideItem) break
                     }
                 }
+                eventType = parser.next()
             }
-            eventType = parser.next()
+            stream.close()
+
+            return@withContext if (enclosureUrl != null) {
+                Track(
+                    title   = title ?: fallbackTitle,
+                    url     = enclosureUrl,
+                    iconUrl = iconInItem ?: channelIcon
+                )
+            } else null
+        } catch (ex: Exception) {
+            ex.printStackTrace()
+            null
         }
-        stream.close()
-
-        val iconUrl = iconInItem ?: channelIcon
-
-        return@withContext if (enclosureUrl != null) {
-            Track(
-                title = title ?: fallbackTitle,
-                url = enclosureUrl,
-                iconUrl = iconUrl
-            )
-        } else null
-    } catch (ex: Exception) {
-        ex.printStackTrace()
-        null
     }
-}
 
 fun loadPlaylistFromOpml(opml: String, callback: (List<Track>) -> Unit) {
     CoroutineScope(Dispatchers.Main).launch {
@@ -176,8 +162,6 @@ class MainActivity : AppCompatActivity() {
 
     private val TAG = "PlayTheNews"
     private val playlist = mutableListOf<Track>()
-    private var player: MediaController? = null
-    private var isPrepared = false
 
     private lateinit var urlRecyclerView: RecyclerView
     private lateinit var playlistAdapter: PlaylistAdapter
@@ -185,28 +169,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var playerView: PlayerView
     private lateinit var playlistItemTouchHelper: ItemTouchHelper
 
-    // null = nothing highlighted until actual playback begins
-    private var currentTrackIndex: Int? = null
+    private var currentTrackIndex: Int? = null   // null = nothing highlighted yet
     private val handler = Handler(Looper.getMainLooper())
     private var isPlaylistInitialized = false
     private var isEditMode = false
 
-    // Set to true by playFromTrack() just before it calls seekTo() with the
-    // saved position, so onMediaItemTransition knows NOT to seek again.
-    // Cleared immediately after the transition handler reads it.
+    // See playFromTrack() / onMediaItemTransition for why this flag exists
     private var positionAlreadyRestored = false
+
+    private val ASSUMED_DURATION_MS = 60 * 60 * 1000L // 60 min fallback
 
     // -------------------------------------------------------------------------
     // Playback position persistence
-    //
-    // Positions are stored in SharedPreferences keyed by track URL so they
-    // survive playlist reorders, app kills, and new sessions.
-    // Key format:  "pos:<url>"
     // -------------------------------------------------------------------------
 
     private fun positionKey(url: String) = "pos:$url"
 
-    /** Persist the playback position for a given track URL (milliseconds). */
     private fun savePosition(url: String, positionMs: Long) {
         if (positionMs <= 0) return
         applicationContext
@@ -215,22 +193,21 @@ class MainActivity : AppCompatActivity() {
         Log.d(TAG, "savePosition: $url -> ${positionMs}ms")
     }
 
-    /** Return the saved playback position for a URL, or 0 if none. */
     private fun savedPosition(url: String): Long =
         applicationContext
             .getSharedPreferences("prefs", Context.MODE_PRIVATE)
             .getLong(positionKey(url), 0L)
 
-    /** Save the position of whatever track is currently loaded in the player. */
     private fun saveCurrentPosition() {
         val p = playerView.player ?: return
         val idx = p.currentMediaItemIndex
         if (idx in playlist.indices) {
-            val pos = p.currentPosition
-            savePosition(playlist[idx].url, pos)
+            savePosition(playlist[idx].url, p.currentPosition)
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Activity result launchers
     // -------------------------------------------------------------------------
 
     private val searchResultLauncher = registerForActivityResult(
@@ -240,9 +217,7 @@ class MainActivity : AppCompatActivity() {
             Log.d(TAG, "Returned from SearchActivity with new data. Reloading podcasts.")
             val prefs = applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
             val opmlContent = prefs.getString("opml", null)
-            if (opmlContent != null) {
-                updateList(opmlContent)
-            }
+            if (opmlContent != null) updateList(opmlContent)
         }
     }
 
@@ -257,21 +232,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Lifecycle
+    // -------------------------------------------------------------------------
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        playerView = findViewById(R.id.player_view)
+        playerView    = findViewById(R.id.player_view)
         urlRecyclerView = findViewById(R.id.urlRecyclerView)
+
         playlistAdapter = PlaylistAdapter(
             playlist.toMutableList(),
-            null, // null = nothing highlighted at startup
-            onTrackClick = { position -> playFromTrack(position) },
-            onItemMoved = { fromPos, toPos -> onPlaylistItemMoved(fromPos, toPos) },
+            null,   // nothing highlighted at startup
+            onTrackClick  = { position -> playFromTrack(position) },
+            onItemMoved   = { fromPos, toPos -> onPlaylistItemMoved(fromPos, toPos) },
             onItemDeleted = { position -> onPlaylistItemDeleted(position) }
         )
         urlRecyclerView.layoutManager = LinearLayoutManager(this)
         urlRecyclerView.adapter = playlistAdapter
+        // Disable the cross-fade animation that fires on every notifyItemChanged call
+        (urlRecyclerView.itemAnimator as? androidx.recyclerview.widget.SimpleItemAnimator)
+            ?.supportsChangeAnimations = false
 
         val touchHelperCallback = PlaylistItemTouchHelper(playlistAdapter)
         playlistItemTouchHelper = ItemTouchHelper(touchHelperCallback)
@@ -279,34 +262,27 @@ class MainActivity : AppCompatActivity() {
         playlistAdapter.setItemTouchHelper(playlistItemTouchHelper)
 
         supportActionBar?.title = ""
-
-        Log.d(TAG, "onCreate: playlist: " + playlist.size)
     }
 
     override fun onStart() {
         super.onStart()
 
-        val sessionToken =
-            SessionToken(applicationContext, ComponentName(applicationContext, PlaybackService::class.java))
+        val sessionToken = SessionToken(
+            applicationContext,
+            ComponentName(applicationContext, PlaybackService::class.java)
+        )
 
         val prefs = applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
-        var opmlContent = prefs.getString("opml", null)
-        if (opmlContent == null) {
-            opmlContent = assets.open("subscriptions.opml").bufferedReader().use { it.readText() }
-        }
-
-        Log.d(TAG, "onStart: playlist: " + playlist.size)
+        val opmlContent = prefs.getString("opml", null)
+            ?: assets.open("subscriptions.opml").bufferedReader().use { it.readText() }
 
         controllerFuture = MediaController.Builder(applicationContext, sessionToken).buildAsync()
 
         controllerFuture.addListener({
             val controller = controllerFuture.get()
-            player = controller
             playerView.player = controller
-            Log.d(TAG, "onStart: got the player, mediaItemCount=${controller.mediaItemCount}")
+            Log.d(TAG, "onStart: got player, mediaItemCount=${controller.mediaItemCount}")
 
-            // Re-load the playlist if this is the first connect OR if the service
-            // was killed while dormant and came back with an empty ExoPlayer instance.
             if (!isPlaylistInitialized || controller.mediaItemCount == 0) {
                 Log.d(TAG, "onStart: (re)initialising playlist")
                 isPlaylistInitialized = true
@@ -315,35 +291,28 @@ class MainActivity : AppCompatActivity() {
 
             playerView.setControllerShowTimeoutMs(0)
             playerView.controllerAutoShow = true
+            controller.prepare()
 
-            playerView.player?.prepare()
-            Log.d(TAG, "onStart: prepared player")
-
-            // Sync highlight from the actual player state on reconnect
-            val actualIndex = controller.currentMediaItemIndex
+            // Sync highlight from actual player state on reconnect
             if (controller.mediaItemCount > 0) {
-                currentTrackIndex = actualIndex
+                currentTrackIndex = controller.currentMediaItemIndex
                 playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
             }
 
             updatePlaybackControls()
 
-            playerView.player?.addListener(object : Player.Listener {
+            controller.addListener(object : Player.Listener {
 
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                     runOnUiThread {
                         val newIndex = playerView.player?.currentMediaItemIndex
                         Log.d(TAG, "onMediaItemTransition: newIndex=$newIndex reason=$reason positionAlreadyRestored=$positionAlreadyRestored")
                         if (newIndex != null && newIndex != currentTrackIndex) {
-                            // Persist position of the track we are leaving
                             saveCurrentPosition()
                             currentTrackIndex = newIndex
                             playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
                             updateTitleAndButtons()
                         }
-                        // Restore saved position for the new track unless playFromTrack()
-                        // already called seekTo() with the correct position just before
-                        // triggering this transition.
                         if (positionAlreadyRestored) {
                             positionAlreadyRestored = false
                         } else if (newIndex != null && newIndex in playlist.indices) {
@@ -378,62 +347,8 @@ class MainActivity : AppCompatActivity() {
         }, MoreExecutors.directExecutor())
     }
 
-    override fun onStop() {
-        super.onStop()
-        // Persist position before releasing the controller
-        saveCurrentPosition()
-        handler.removeCallbacksAndMessages(null)
-        MediaController.releaseFuture(controllerFuture)
-        player = null
-    }
-
-    private fun playTheNews() {
-        playerView.player?.prepare()
-        playerView.player?.playWhenReady = true
-    }
-
-    private fun updatePlaybackControls() {
-        handler.removeCallbacksAndMessages(null)
-        handler.postDelayed(object : Runnable {
-            override fun run() {
-                val p = playerView.player ?: return
-
-                val currentItemIndex = p.currentMediaItemIndex
-                if (currentItemIndex != currentTrackIndex) {
-                    Log.d(TAG, "updatePlaybackControls: index changed $currentTrackIndex -> $currentItemIndex")
-                    currentTrackIndex = currentItemIndex
-                    playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
-                    updateTitleAndButtons()
-                }
-
-                // Update progress bar for the active track using exact player values.
-                // For all other tracks we rely on the saved-position estimate set at load time.
-                if (currentItemIndex in playlist.indices) {
-                    val posMs = p.currentPosition
-                    val durMs = p.duration.takeIf { it > 0 } ?: ASSUMED_DURATION_MS
-                    val progress = ((posMs.toFloat() / durMs) * 1000).toInt().coerceIn(0, 1000)
-                    playlistAdapter.setTrackProgress(playlist[currentItemIndex].url, progress)
-                }
-
-                // Persist position every second while actively playing
-                if (p.isPlaying) {
-                    saveCurrentPosition()
-                }
-
-                handler.postDelayed(this, 1000)
-            }
-        }, 1000)
-    }
-
-    private fun formatTime(milliseconds: Long): String {
-        val seconds = (milliseconds / 1000) % 60
-        val minutes = (milliseconds / (1000 * 60)) % 60
-        return String.format("%d:%02d", minutes, seconds)
-    }
-
     override fun onResume() {
         super.onResume()
-        // Sync from player on resume in case the index changed while paused
         val actualIndex = playerView.player?.currentMediaItemIndex
         if (actualIndex != null && actualIndex != currentTrackIndex) {
             currentTrackIndex = actualIndex
@@ -443,24 +358,105 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        // Save position whenever the activity goes to background
         saveCurrentPosition()
     }
+
+    override fun onStop() {
+        super.onStop()
+        saveCurrentPosition()
+        handler.removeCallbacksAndMessages(null)
+        MediaController.releaseFuture(controllerFuture)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        handler.removeCallbacksAndMessages(null)
+    }
+
+    // -------------------------------------------------------------------------
+    // Playback controls
+    // -------------------------------------------------------------------------
+
+    private fun playTheNews() {
+        playerView.player?.prepare()
+        playerView.player?.playWhenReady = true
+    }
+
+    /**
+     * Polls every second to:
+     *  1. Detect index changes (drives highlight + title).
+     *  2. Push exact progress to the active track's progress bar.
+     *  3. Persist playback position while playing.
+     *
+     * setCurrentlyPlayingIndex is only called when the index actually changes,
+     * so the currently-playing row is never needlessly rebound — no more flash.
+     */
+    private fun updatePlaybackControls() {
+        handler.removeCallbacksAndMessages(null)
+        handler.postDelayed(object : Runnable {
+            override fun run() {
+                val p = playerView.player ?: return
+
+                val currentItemIndex = p.currentMediaItemIndex
+
+                // Only notify the adapter when the index actually changes
+                if (currentItemIndex != currentTrackIndex) {
+                    Log.d(TAG, "updatePlaybackControls: index $currentTrackIndex -> $currentItemIndex")
+                    currentTrackIndex = currentItemIndex
+                    playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
+                    updateTitleAndButtons()
+                }
+
+                // Push exact progress for the active track (partial bind — no flash)
+                if (currentItemIndex in playlist.indices) {
+                    val posMs = p.currentPosition
+                    val durMs = p.duration.takeIf { it > 0 } ?: ASSUMED_DURATION_MS
+                    val progress = ((posMs.toFloat() / durMs) * 1000).toInt().coerceIn(0, 1000)
+                    playlistAdapter.setTrackProgress(playlist[currentItemIndex].url, progress)
+                }
+
+                if (p.isPlaying) saveCurrentPosition()
+
+                handler.postDelayed(this, 1000)
+            }
+        }, 1000)
+    }
+
+    fun playFromTrack(index: Int?) {
+        if (index == null || index !in playlist.indices) return
+
+        Log.d(TAG, "playFromTrack: $index")
+        currentTrackIndex = index
+        playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
+
+        val savedPos = savedPosition(playlist[index].url)
+        if (savedPos > 0) {
+            Log.d(TAG, "playFromTrack: resuming at ${savedPos}ms")
+            positionAlreadyRestored = true
+            playerView.player?.seekTo(index, savedPos)
+        } else {
+            playerView.player?.seekTo(index, 0)
+        }
+
+        playTheNews()
+    }
+
+    // -------------------------------------------------------------------------
+    // Playlist management
+    // -------------------------------------------------------------------------
 
     fun setPlaylist() {
         playerView.player?.clearMediaItems()
 
-        Log.d(TAG, "setPlaylist: " + playlist.size)
         playlist.forEach { track ->
-            val metadataBuilder = MediaMetadata.Builder()
+            val metadata = MediaMetadata.Builder()
                 .setTitle(track.title)
                 .setArtist(track.feed?.title ?: "Podcast")
-
-            if (!track.iconUrl.isNullOrBlank()) {
-                metadataBuilder.setArtworkUri(Uri.parse(track.iconUrl))
-            }
-
-            val metadata = metadataBuilder.build()
+                .apply {
+                    if (!track.iconUrl.isNullOrBlank())
+                        setArtworkUri(Uri.parse(track.iconUrl))
+                }
+                .build()
 
             val mediaItem = MediaItem.Builder()
                 .setUri(track.url)
@@ -468,37 +464,26 @@ class MainActivity : AppCompatActivity() {
                 .build()
 
             playerView.player?.addMediaItem(mediaItem)
-            Log.d(TAG, "setPlaylist: ${track.url} with metadata: ${track.title}")
         }
 
-        // Prepare so the player accepts seekTo calls
         playerView.player?.prepare()
 
-        // Restore each track's saved position using seekTo(windowIndex, positionMs).
-        // ExoPlayer records these offsets per window and applies them when that
-        // item is loaded, so all tracks resume from where the user left off.
+        // Restore each track's saved position by window index
         playlist.forEachIndexed { index, track ->
             val savedPos = savedPosition(track.url)
             if (savedPos > 0) {
-                Log.d(TAG, "setPlaylist restore: index=$index pos=${savedPos}ms url=${track.url}")
+                Log.d(TAG, "setPlaylist restore: index=$index pos=${savedPos}ms")
                 playerView.player?.seekTo(index, savedPos)
             }
         }
 
-        // Reset highlight — will be synced by updatePlaybackControls / listeners
         currentTrackIndex = null
         playlistAdapter.setCurrentlyPlayingIndex(null)
     }
 
-    private val ASSUMED_DURATION_MS = 60 * 60 * 1000L // 60 min fallback for progress bar scaling
-
     /**
-     * Push persisted progress (0–1000) for every track into the adapter so bars
-     * are visible right after a load/reload, before any item is buffered.
-     * We scale against a fixed 60-minute assumed duration; the bar is approximate
-     * but directionally correct for typical podcast episode lengths.
-     * Once the active track is playing, the polling loop replaces its value with
-     * an exact figure derived from the real duration reported by the player.
+     * Push saved progress for every track into the adapter immediately after a
+     * load/reload so bars are visible before any item is buffered.
      */
     private fun pushAllSavedProgress() {
         playlist.forEach { track ->
@@ -515,15 +500,46 @@ class MainActivity : AppCompatActivity() {
             playlist.clear()
             playlist.addAll(loadedPlaylist)
             playlistAdapter.updateTracks(playlist)
-            Log.d(TAG, "updateList: playlist: " + playlist.size)
             setPlaylist()
             pushAllSavedProgress()
-            val prefs = applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
-            prefs.edit {
-                putString("opml", opmlContent)
-            }
+            applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+                .edit { putString("opml", opmlContent) }
         }
     }
+
+    private fun onPlaylistItemMoved(fromPosition: Int, toPosition: Int) {
+        val movedTrack = playlist.removeAt(fromPosition)
+        playlist.add(toPosition, movedTrack)
+        savePlaylistToOpml()
+        setPlaylist()
+    }
+
+    private fun onPlaylistItemDeleted(position: Int) {
+        playlist.removeAt(position)
+        savePlaylistToOpml()
+        setPlaylist()
+        Toast.makeText(this, "Podcast removed", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun savePlaylistToOpml() {
+        val sb = StringBuilder()
+        sb.append("<?xml version='1.0' encoding='UTF-8' standalone='no' ?>\n")
+        sb.append("<opml version=\"2.0\">\n")
+        sb.append("  <head><title>Play the News Subscriptions</title></head>\n")
+        sb.append("  <body>\n")
+        for (track in playlist) {
+            track.feed?.let { feed ->
+                sb.append("    <outline text=\"${escapeXml(feed.title)}\" title=\"${escapeXml(feed.title)}\" type=\"rss\" xmlUrl=\"${escapeXml(feed.xmlUrl)}\" />\n")
+            }
+        }
+        sb.append("  </body>\n</opml>")
+        applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+            .edit { putString("opml", sb.toString()) }
+    }
+
+    // -------------------------------------------------------------------------
+    // Menu
+    // -------------------------------------------------------------------------
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.player_menu, menu)
@@ -533,139 +549,24 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            R.id.action_load_opml -> {
-                pickOpmlLauncher.launch(arrayOf(OPML_MIME))
-                true
+            R.id.action_load_opml -> { pickOpmlLauncher.launch(arrayOf(OPML_MIME)); true }
+            R.id.action_search    -> {
+                searchResultLauncher.launch(Intent(this, SearchActivity::class.java)); true
             }
-            R.id.action_search -> {
-                val intent = Intent(this, SearchActivity::class.java)
-                searchResultLauncher.launch(intent)
-                true
-            }
-            R.id.action_edit -> {
-                toggleEditMode()
-                invalidateOptionsMenu()
-                true
-            }
-            R.id.action_about -> {
-                val url = "https://frandroidlabs.meimeidream.com/playthenews.html"
-                val intent = Intent(Intent.ACTION_VIEW)
-                intent.data = url.toUri()
-                startActivity(intent)
-                true
+            R.id.action_edit      -> { toggleEditMode(); invalidateOptionsMenu(); true }
+            R.id.action_about     -> {
+                startActivity(Intent(Intent.ACTION_VIEW,
+                    "https://frandroidlabs.meimeidream.com/playthenews.html".toUri())); true
             }
             else -> super.onOptionsItemSelected(item)
         }
     }
 
-    fun readOpmlFromUri(uri: Uri): String? {
-        return try {
-            contentResolver.openInputStream(uri)?.bufferedReader().use { it?.readText() }
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
-    }
-
-    fun playFromTrack(index: Int?) {
-        if (index == null || index !in playlist.indices) return
-
-        val idx = index.toInt()
-        Log.d(TAG, "Playing the list from $idx")
-
-        // Update highlight immediately on user tap
-        currentTrackIndex = idx
-        playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
-
-        // Resume from the saved position for this track, or from the start if none
-        val savedPos = savedPosition(playlist[idx].url)
-        if (savedPos > 0) {
-            Log.d(TAG, "playFromTrack: resuming at ${savedPos}ms for index $idx")
-            positionAlreadyRestored = true
-            playerView.player?.seekTo(idx, savedPos)
-        } else {
-            playerView.player?.seekTo(idx, 0)
-        }
-
-        playTheNews()
-    }
-
-    private fun formatTime(millis: Int): String {
-        val secs = millis / 1000
-        val min = secs / 60
-        val sec = secs % 60
-        return String.format("%d:%02d", min, sec)
-    }
-
-    private fun skip(amountMs: Int) {
-        val currentPosition = player?.currentPosition ?: 0
-        player?.seekTo(currentPosition + amountMs)
-    }
-
-    private fun updateTitleAndButtons() {
-        if (currentTrackIndex != null && currentTrackIndex!! >= 0 && currentTrackIndex!! < playlist.size) {
-            val ct: Int = currentTrackIndex!!
-            val (title, _) = playlist[ct]
-            supportActionBar?.title = title
-        }
-    }
-
-    private fun isPlaying(): Boolean {
-        return player?.isPlaying == true
-    }
-
-    private fun skipNext() {
-        val size = playlist.size
-        if (size == 0) return
-        currentTrackIndex = ((currentTrackIndex ?: -1) + 1) % size
-        playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
-        playFromTrack(currentTrackIndex)
-    }
-
-    private fun skipPrev() {
-        val size = playlist.size
-        if (size == 0) return
-        val prev = (currentTrackIndex ?: 0) - 1
-        currentTrackIndex = if (prev < 0) size - 1 else prev
-        playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
-        playFromTrack(currentTrackIndex)
-    }
-
-    private fun updateUrlList() {
-        for ((index, item) in playlist.withIndex()) {
-            val urlView = TextView(this)
-            urlView.text = "${item.title}: ${item.url}"
-            urlView.setPadding(8, 8, 8, 8)
-            urlView.textSize = 14f
-            if (index == currentTrackIndex) {
-                urlView.setTypeface(null, Typeface.BOLD)
-                urlView.setTextColor(
-                    ContextCompat.getColor(this, android.R.color.holo_blue_dark)
-                )
-            } else {
-                urlView.setTypeface(null, Typeface.NORMAL)
-                urlView.setTextColor(
-                    ContextCompat.getColor(this, R.color.track_unselected_text)
-                )
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        Log.d(TAG, "onDestroy: ")
-        handler.removeCallbacksAndMessages(null)
-        player?.release()
-        player = null
-    }
-
     private fun toggleEditMode() {
         isEditMode = !isEditMode
         playlistAdapter.setEditMode(isEditMode)
-
-        if (isEditMode) {
+        if (isEditMode)
             Toast.makeText(this, "Edit mode: Drag to reorder, swipe to delete", Toast.LENGTH_SHORT).show()
-        }
     }
 
     private fun updateEditMenuItem(menu: Menu) {
@@ -679,54 +580,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun onPlaylistItemMoved(fromPosition: Int, toPosition: Int) {
-        val movedTrack = playlist.removeAt(fromPosition)
-        playlist.add(toPosition, movedTrack)
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
 
-        savePlaylistToOpml()
-        setPlaylist()
-    }
+    fun readOpmlFromUri(uri: Uri): String? =
+        try { contentResolver.openInputStream(uri)?.bufferedReader().use { it?.readText() } }
+        catch (e: Exception) { e.printStackTrace(); null }
 
-    private fun onPlaylistItemDeleted(position: Int) {
-        playlist.removeAt(position)
-
-        savePlaylistToOpml()
-        setPlaylist()
-
-        Toast.makeText(this, "Podcast removed", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun savePlaylistToOpml() {
-        val opmlBuilder = StringBuilder()
-        opmlBuilder.append("<?xml version='1.0' encoding='UTF-8' standalone='no' ?>\n")
-        opmlBuilder.append("<opml version=\"2.0\">\n")
-        opmlBuilder.append("  <head>\n")
-        opmlBuilder.append("    <title>Play the News Subscriptions</title>\n")
-        opmlBuilder.append("  </head>\n")
-        opmlBuilder.append("  <body>\n")
-
-        for (track in playlist) {
-            track.feed?.let { feed ->
-                val title = escapeXml(feed.title)
-                val xmlUrl = escapeXml(feed.xmlUrl)
-                opmlBuilder.append("    <outline text=\"$title\" title=\"$title\" type=\"rss\" xmlUrl=\"$xmlUrl\" />\n")
-            }
-        }
-
-        opmlBuilder.append("  </body>\n")
-        opmlBuilder.append("</opml>")
-
-        val prefs = applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
-        prefs.edit {
-            putString("opml", opmlBuilder.toString())
+    private fun updateTitleAndButtons() {
+        val idx = currentTrackIndex ?: return
+        if (idx in playlist.indices) {
+            supportActionBar?.title = playlist[idx].title
         }
     }
 
-    private fun escapeXml(text: String): String {
-        return text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
-    }
+    private fun escapeXml(text: String) = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&apos;")
 }
