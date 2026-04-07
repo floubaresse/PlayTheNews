@@ -2,12 +2,9 @@ package com.frandroidlabs.playthenews
 
 import android.app.Activity
 import android.content.Context
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
-import android.widget.TextView
 import android.widget.Toast
-import androidx.core.content.ContextCompat
 import android.content.ComponentName
 import android.content.Intent
 
@@ -188,14 +185,14 @@ class MainActivity : AppCompatActivity() {
     private fun savePosition(url: String, positionMs: Long) {
         if (positionMs <= 0) return
         applicationContext
-            .getSharedPreferences("prefs", Context.MODE_PRIVATE)
+            .getSharedPreferences("prefs", MODE_PRIVATE)
             .edit { putLong(positionKey(url), positionMs) }
         Log.d(TAG, "savePosition: $url -> ${positionMs}ms")
     }
 
     private fun savedPosition(url: String): Long =
         applicationContext
-            .getSharedPreferences("prefs", Context.MODE_PRIVATE)
+            .getSharedPreferences("prefs", MODE_PRIVATE)
             .getLong(positionKey(url), 0L)
 
     private fun saveCurrentPosition() {
@@ -213,9 +210,9 @@ class MainActivity : AppCompatActivity() {
     private val searchResultLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
+        if (result.resultCode == RESULT_OK) {
             Log.d(TAG, "Returned from SearchActivity with new data. Reloading podcasts.")
-            val prefs = applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+            val prefs = applicationContext.getSharedPreferences("prefs", MODE_PRIVATE)
             val opmlContent = prefs.getString("opml", null)
             if (opmlContent != null) updateList(opmlContent)
         }
@@ -272,7 +269,7 @@ class MainActivity : AppCompatActivity() {
             ComponentName(applicationContext, PlaybackService::class.java)
         )
 
-        val prefs = applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+        val prefs = applicationContext.getSharedPreferences("prefs", MODE_PRIVATE)
         val opmlContent = prefs.getString("opml", null)
             ?: assets.open("subscriptions.opml").bufferedReader().use { it.readText() }
 
@@ -502,7 +499,7 @@ class MainActivity : AppCompatActivity() {
             playlistAdapter.updateTracks(playlist)
             setPlaylist()
             pushAllSavedProgress()
-            applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+            applicationContext.getSharedPreferences("prefs", MODE_PRIVATE)
                 .edit { putString("opml", opmlContent) }
         }
     }
@@ -533,7 +530,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         sb.append("  </body>\n</opml>")
-        applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+        applicationContext.getSharedPreferences("prefs", MODE_PRIVATE)
             .edit { putString("opml", sb.toString()) }
     }
 
