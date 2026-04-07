@@ -6,6 +6,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import android.app.PendingIntent
 
 class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
@@ -14,8 +15,25 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
         val player = ExoPlayer.Builder(this).build()
 
-        // Metadata is automatically propagated to the session; no extra listener needed.
-        mediaSession = MediaSession.Builder(this, player).build()
+        player.addListener(object : Player.Listener {
+            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+                super.onMediaMetadataChanged(mediaMetadata)
+            }
+        })
+
+        val intent = packageManager.getLaunchIntentForPackage(packageName)!!
+            .apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        mediaSession = MediaSession.Builder(this, player)
+            .setSessionActivity(pendingIntent)
+            .build()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
