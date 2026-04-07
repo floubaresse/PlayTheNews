@@ -6,6 +6,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
@@ -24,6 +25,10 @@ class PlaylistAdapter(
 
     private var isEditMode = false
     private var touchHelper: ItemTouchHelper? = null
+
+    // Progress values (0–1000) keyed by track URL so they survive reorders.
+    // 0 means no saved position → bar hidden. >0 shows the bar.
+    private val progressMap = mutableMapOf<String, Int>()
 
     fun setItemTouchHelper(helper: ItemTouchHelper) {
         touchHelper = helper
@@ -46,16 +51,20 @@ class PlaylistAdapter(
 
     override fun onBindViewHolder(holder: TrackViewHolder, position: Int) {
         val track = tracks[position]
-        holder.bind(track, isPlaying = (position == currentlyPlayingIndex), isEditMode = isEditMode)
+        val progress = progressMap[track.url] ?: 0
+        holder.bind(
+            track,
+            isPlaying = (position == currentlyPlayingIndex),
+            isEditMode = isEditMode,
+            progress = progress
+        )
 
-        // Add click listener (only when not in edit mode)
         holder.itemView.setOnClickListener {
             if (!isEditMode) {
                 onTrackClick?.invoke(position)
             }
         }
 
-        // Set up drag handle
         holder.dragHandle.setOnTouchListener { _, event ->
             if (event.actionMasked == MotionEvent.ACTION_DOWN && isEditMode) {
                 touchHelper?.startDrag(holder)
@@ -66,7 +75,6 @@ class PlaylistAdapter(
         }
     }
 
-    // Provide an update function to set the new playing index and refresh
     fun setCurrentlyPlayingIndex(index: Int?) {
         val previousIndex = currentlyPlayingIndex
         currentlyPlayingIndex = index
@@ -81,6 +89,20 @@ class PlaylistAdapter(
         }
     }
 
+    /**
+     * Update the progress bar for a single track identified by URL.
+     * [progressValue] is in the range 0–1000 (per ProgressBar max).
+     * Pass 0 to hide the bar.
+     * Only triggers a rebind if the value actually changed.
+     */
+    fun setTrackProgress(url: String, progressValue: Int) {
+        val old = progressMap[url] ?: 0
+        if (old == progressValue) return
+        progressMap[url] = progressValue
+        val idx = tracks.indexOfFirst { it.url == url }
+        if (idx != -1) notifyItemChanged(idx)
+    }
+
     fun moveItem(fromPosition: Int, toPosition: Int) {
         if (fromPosition < toPosition) {
             for (i in fromPosition until toPosition) {
@@ -92,7 +114,6 @@ class PlaylistAdapter(
             }
         }
 
-        // Update currently playing index if needed
         if (currentlyPlayingIndex != null) {
             when {
                 currentlyPlayingIndex == fromPosition -> currentlyPlayingIndex = toPosition
@@ -108,7 +129,6 @@ class PlaylistAdapter(
     fun removeItem(position: Int) {
         tracks.removeAt(position)
 
-        // Update currently playing index if needed
         if (currentlyPlayingIndex != null) {
             when {
                 currentlyPlayingIndex == position -> currentlyPlayingIndex = null
@@ -125,8 +145,9 @@ class PlaylistAdapter(
         val playingIndicator: ImageView = itemView.findViewById(R.id.playingIndicator)
         private val trackIcon: ImageView = itemView.findViewById(R.id.trackIcon)
         val dragHandle: ImageView = itemView.findViewById(R.id.dragHandle)
+        private val trackProgress: ProgressBar = itemView.findViewById(R.id.trackProgress)
 
-        fun bind(track: Track, isPlaying: Boolean, isEditMode: Boolean) {
+        fun bind(track: Track, isPlaying: Boolean, isEditMode: Boolean, progress: Int) {
             titleTextView.text = track.title
 
             Picasso.get()
@@ -135,7 +156,6 @@ class PlaylistAdapter(
                 .error(R.drawable.ic_error_icon)
                 .into(trackIcon)
 
-            // Show/hide drag handle based on edit mode
             dragHandle.visibility = if (isEditMode) View.VISIBLE else View.GONE
 
             if (isPlaying) {
@@ -144,6 +164,14 @@ class PlaylistAdapter(
             } else {
                 itemView.setBackgroundResource(android.R.color.transparent)
                 playingIndicator.visibility = View.INVISIBLE
+            }
+
+            // Show progress bar whenever there is a saved position (progress > 0)
+            if (progress > 0) {
+                trackProgress.visibility = View.VISIBLE
+                trackProgress.progress = progress
+            } else {
+                trackProgress.visibility = View.GONE
             }
         }
     }

@@ -40,6 +40,18 @@
             android:maxLines="2"
             android:ellipsize="end" />
 
+        <ProgressBar
+            android:id="@+id/trackProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_marginTop="6dp"
+            android:max="1000"
+            android:progress="0"
+            android:progressTint="@color/teal_200"
+            android:backgroundTint="@color/track_progress_bg"
+            android:visibility="gone" />
+
     </LinearLayout>
 
     <ImageView

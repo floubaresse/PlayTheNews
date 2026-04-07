@@ -9,4 +9,5 @@
     <color name="white">#FFFFFFFF</color>
     <color name="track_unselected_text">#444444</color>
     <color name="currently_playing_bg">#446666</color>
+    <color name="track_progress_bg">#33FFFFFF</color>
 </resources>

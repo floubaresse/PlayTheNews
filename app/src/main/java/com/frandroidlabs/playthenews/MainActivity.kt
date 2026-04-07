@@ -406,6 +406,15 @@ class MainActivity : AppCompatActivity() {
                     updateTitleAndButtons()
                 }
 
+                // Update progress bar for the active track using exact player values.
+                // For all other tracks we rely on the saved-position estimate set at load time.
+                if (currentItemIndex in playlist.indices) {
+                    val posMs = p.currentPosition
+                    val durMs = p.duration.takeIf { it > 0 } ?: ASSUMED_DURATION_MS
+                    val progress = ((posMs.toFloat() / durMs) * 1000).toInt().coerceIn(0, 1000)
+                    playlistAdapter.setTrackProgress(playlist[currentItemIndex].url, progress)
+                }
+
                 // Persist position every second while actively playing
                 if (p.isPlaying) {
                     saveCurrentPosition()
@@ -481,6 +490,26 @@ class MainActivity : AppCompatActivity() {
         playlistAdapter.setCurrentlyPlayingIndex(null)
     }
 
+    private val ASSUMED_DURATION_MS = 60 * 60 * 1000L // 60 min fallback for progress bar scaling
+
+    /**
+     * Push persisted progress (0–1000) for every track into the adapter so bars
+     * are visible right after a load/reload, before any item is buffered.
+     * We scale against a fixed 60-minute assumed duration; the bar is approximate
+     * but directionally correct for typical podcast episode lengths.
+     * Once the active track is playing, the polling loop replaces its value with
+     * an exact figure derived from the real duration reported by the player.
+     */
+    private fun pushAllSavedProgress() {
+        playlist.forEach { track ->
+            val savedPos = savedPosition(track.url)
+            val progress = if (savedPos > 0)
+                ((savedPos.toFloat() / ASSUMED_DURATION_MS) * 1000).toInt().coerceIn(1, 1000)
+            else 0
+            playlistAdapter.setTrackProgress(track.url, progress)
+        }
+    }
+
     private fun updateList(opmlContent: String) {
         loadPlaylistFromOpml(opmlContent) { loadedPlaylist ->
             playlist.clear()
@@ -488,6 +517,7 @@ class MainActivity : AppCompatActivity() {
             playlistAdapter.updateTracks(playlist)
             Log.d(TAG, "updateList: playlist: " + playlist.size)
             setPlaylist()
+            pushAllSavedProgress()
             val prefs = applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
             prefs.edit {
                 putString("opml", opmlContent)
