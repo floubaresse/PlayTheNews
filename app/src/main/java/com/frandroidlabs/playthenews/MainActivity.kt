@@ -1,7 +1,5 @@
 package com.frandroidlabs.playthenews
 
-import android.app.Activity
-import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -451,7 +449,7 @@ class MainActivity : AppCompatActivity() {
                 .setArtist(track.feed?.title ?: "Podcast")
                 .apply {
                     if (!track.iconUrl.isNullOrBlank())
-                        setArtworkUri(Uri.parse(track.iconUrl))
+                        setArtworkUri(track.iconUrl.toUri())
                 }
                 .build()
 

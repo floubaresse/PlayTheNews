@@ -182,5 +182,4 @@ class PlaylistAdapter(
         notifyDataSetChanged()
     }
 
-    fun getTracks(): List<Track> = tracks.toList()
 }
