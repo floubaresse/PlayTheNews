@@ -190,26 +190,15 @@ class MainActivity : AppCompatActivity() {
     // Playback position persistence
     // -------------------------------------------------------------------------
 
-    private fun positionKey(url: String) = "pos:$url"
-
-    private fun savePosition(url: String, positionMs: Long) {
-        if (positionMs <= 0) return
-        applicationContext
-            .getSharedPreferences("prefs", MODE_PRIVATE)
-            .edit { putLong(positionKey(url), positionMs) }
-        Log.d(TAG, "savePosition: $url -> ${positionMs}ms")
-    }
-
-    private fun savedPosition(url: String): Long =
-        applicationContext
-            .getSharedPreferences("prefs", MODE_PRIVATE)
-            .getLong(positionKey(url), 0L)
-
     private fun saveCurrentPosition() {
         val p = playerView.player ?: return
         val idx = p.currentMediaItemIndex
         if (idx in playlist.indices) {
-            savePosition(playlist[idx].url, p.currentPosition)
+            val url = playlist[idx].url
+            val pos = p.currentPosition
+            PositionStore.savePosition(applicationContext, url, pos)
+            PositionStore.saveLastActiveUrl(applicationContext, url)
+            Log.d(TAG, "saveCurrentPosition: $url -> ${pos}ms")
         }
     }
 
@@ -315,7 +304,11 @@ class MainActivity : AppCompatActivity() {
                         val newIndex = playerView.player?.currentMediaItemIndex
                         Log.d(TAG, "onMediaItemTransition: newIndex=$newIndex reason=$reason positionAlreadyRestored=$positionAlreadyRestored")
                         if (newIndex != null && newIndex != currentTrackIndex) {
-                            saveCurrentPosition()
+                            // Do not call saveCurrentPosition() here: by the time this
+                            // callback fires the player has already moved to newIndex, so
+                            // currentMediaItemIndex returns the NEW track and we would
+                            // overwrite the new track's position with 0. The service's
+                            // periodic save has already captured the old track within 1s.
                             currentTrackIndex = newIndex
                             playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
                             updateTitleAndButtons()
@@ -323,7 +316,7 @@ class MainActivity : AppCompatActivity() {
                         if (positionAlreadyRestored) {
                             positionAlreadyRestored = false
                         } else if (newIndex != null && newIndex in playlist.indices) {
-                            val savedPos = savedPosition(playlist[newIndex].url)
+                            val savedPos = PositionStore.savedPosition(applicationContext, playlist[newIndex].url)
                             if (savedPos > 0) {
                                 Log.d(TAG, "onMediaItemTransition restore: index=$newIndex pos=${savedPos}ms")
                                 playerView.player?.seekTo(savedPos)
@@ -436,7 +429,7 @@ class MainActivity : AppCompatActivity() {
         currentTrackIndex = index
         playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
 
-        val savedPos = savedPosition(playlist[index].url)
+        val savedPos = PositionStore.savedPosition(applicationContext, playlist[index].url)
         if (savedPos > 0) {
             Log.d(TAG, "playFromTrack: resuming at ${savedPos}ms")
             positionAlreadyRestored = true
@@ -475,13 +468,27 @@ class MainActivity : AppCompatActivity() {
 
         playerView.player?.prepare()
 
-        // Restore each track's saved position by window index
-        playlist.forEachIndexed { index, track ->
-            val savedPos = savedPosition(track.url)
-            if (savedPos > 0) {
-                Log.d(TAG, "setPlaylist restore: index=$index pos=${savedPos}ms")
-                playerView.player?.seekTo(index, savedPos)
+        // Seek once to the correct starting track. Using lastActiveUrl we can
+        // pinpoint the track the user was on when the app last stopped; the
+        // fallback is the last track in the list that has any saved position
+        // (preserves the behaviour that existed before lastActiveUrl was stored).
+        // Positions for other tracks with saved data are restored individually
+        // by onMediaItemTransition as the player advances to each one.
+        val lastUrl = PositionStore.lastActiveUrl(applicationContext)
+        val startIndex: Int? = when {
+            lastUrl != null -> {
+                val idx = playlist.indexOfFirst { it.url == lastUrl }
+                if (idx >= 0 && PositionStore.savedPosition(applicationContext, playlist[idx].url) > 0)
+                    idx
+                else
+                    playlist.indexOfLast { PositionStore.savedPosition(applicationContext, it.url) > 0 }.takeIf { it >= 0 }
             }
+            else -> playlist.indexOfLast { PositionStore.savedPosition(applicationContext, it.url) > 0 }.takeIf { it >= 0 }
+        }
+        if (startIndex != null) {
+            val savedPos = PositionStore.savedPosition(applicationContext, playlist[startIndex].url)
+            Log.d(TAG, "setPlaylist restore: index=$startIndex pos=${savedPos}ms")
+            playerView.player?.seekTo(startIndex, savedPos)
         }
 
         currentTrackIndex = null
@@ -494,7 +501,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun pushAllSavedProgress() {
         playlist.forEach { track ->
-            val savedPos = savedPosition(track.url)
+            val savedPos = PositionStore.savedPosition(applicationContext, track.url)
             val progress = if (savedPos > 0)
                 ((savedPos.toFloat() / ASSUMED_DURATION_MS) * 1000).toInt().coerceIn(1, 1000)
             else 0
