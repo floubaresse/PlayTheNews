@@ -33,6 +33,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import androidx.media3.common.MediaMetadata
 import androidx.core.net.toUri
+import kotlinx.coroutines.sync.withPermit
 
 
 data class Track(val title: String, val url: String, var feed: FeedInfo? = null, val iconUrl: String?)
@@ -138,17 +139,28 @@ suspend fun extractTrackFromRss(rssUrl: String, fallbackTitle: String): Track? =
     }
 
 fun loadPlaylistFromOpml(opml: String, callback: (List<Track>) -> Unit) {
-    CoroutineScope(Dispatchers.Main).launch {
+    CoroutineScope(Dispatchers.IO).launch {
         val feeds = parseOpml(opml)
-        val playlist = mutableListOf<Track>()
-        for (feed in feeds) {
-            val track = extractTrackFromRss(feed.xmlUrl, feed.title)
-            if (track != null) {
-                track.feed = feed
-                playlist.add(track)
+
+        // Launch all RSS fetches in parallel
+        val semaphore = kotlinx.coroutines.sync.Semaphore(6) // max 6 concurrent fetches
+
+        val deferreds = feeds.map { feed ->
+            async {
+                semaphore.withPermit {
+                    val track = extractTrackFromRss(feed.xmlUrl, feed.title)
+                    if (track != null) track.feed = feed
+                    track
+                }
             }
         }
-        callback(playlist)
+
+        // Wait for all of them, preserving original order
+        val playlist = deferreds.awaitAll().filterNotNull()
+
+        withContext(Dispatchers.Main) {
+            callback(playlist)
+        }
     }
 }
 
