@@ -36,7 +36,15 @@ import androidx.core.net.toUri
 import kotlinx.coroutines.sync.withPermit
 
 
-data class Track(val title: String, val url: String, var feed: FeedInfo? = null, val iconUrl: String?)
+data class Track(
+    val title: String,
+    val url: String,
+    var feed: FeedInfo? = null,
+    val iconUrl: String?,
+    val guid: String? = null
+) {
+    val stableKey: String get() = guid?.takeIf { it.isNotBlank() } ?: url
+}
 data class FeedInfo(val title: String, val xmlUrl: String, val iconUrl: String?)
 
 
@@ -77,6 +85,7 @@ suspend fun extractTrackFromRss(rssUrl: String, fallbackTitle: String): Track? =
             var enclosureUrl: String? = null
             var iconInItem: String? = null
             var channelIcon: String? = null
+            var guid: String? = null
             var insideItem = false
             var insideChannel = false
             var eventType = parser.eventType
@@ -89,6 +98,9 @@ suspend fun extractTrackFromRss(rssUrl: String, fallbackTitle: String): Track? =
                             "item"    -> insideItem = true
                             "title"   -> if (insideItem && title == null) {
                                 title = parser.nextText()
+                            }
+                            "guid"    -> if (insideItem && guid == null) {
+                                guid = parser.nextText()
                             }
                             "enclosure" -> if (insideItem && enclosureUrl == null) {
                                 val type = parser.getAttributeValue(null, "type")
@@ -129,7 +141,8 @@ suspend fun extractTrackFromRss(rssUrl: String, fallbackTitle: String): Track? =
                 Track(
                     title   = title ?: fallbackTitle,
                     url     = enclosureUrl,
-                    iconUrl = iconInItem ?: channelIcon
+                    iconUrl = iconInItem ?: channelIcon,
+                    guid    = guid
                 )
             } else null
         } catch (ex: Exception) {
@@ -194,11 +207,11 @@ class MainActivity : AppCompatActivity() {
         val p = playerView.player ?: return
         val idx = p.currentMediaItemIndex
         if (idx in playlist.indices) {
-            val url = playlist[idx].url
+            val key = playlist[idx].stableKey
             val pos = p.currentPosition
-            PositionStore.savePosition(applicationContext, url, pos)
-            PositionStore.saveLastActiveUrl(applicationContext, url)
-            Log.d(TAG, "saveCurrentPosition: $url -> ${pos}ms")
+            PositionStore.savePosition(applicationContext, key, pos)
+            PositionStore.saveLastActiveUrl(applicationContext, key)
+            Log.d(TAG, "saveCurrentPosition: $key -> ${pos}ms")
         }
     }
 
@@ -316,7 +329,7 @@ class MainActivity : AppCompatActivity() {
                         if (positionAlreadyRestored) {
                             positionAlreadyRestored = false
                         } else if (newIndex != null && newIndex in playlist.indices) {
-                            val savedPos = PositionStore.savedPosition(applicationContext, playlist[newIndex].url)
+                            val savedPos = PositionStore.savedPosition(applicationContext, playlist[newIndex].stableKey)
                             if (savedPos > 0) {
                                 Log.d(TAG, "onMediaItemTransition restore: index=$newIndex pos=${savedPos}ms")
                                 playerView.player?.seekTo(savedPos)
@@ -429,7 +442,7 @@ class MainActivity : AppCompatActivity() {
         currentTrackIndex = index
         playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
 
-        val savedPos = PositionStore.savedPosition(applicationContext, playlist[index].url)
+        val savedPos = PositionStore.savedPosition(applicationContext, playlist[index].stableKey)
         if (savedPos > 0) {
             Log.d(TAG, "playFromTrack: resuming at ${savedPos}ms")
             positionAlreadyRestored = true
@@ -460,6 +473,7 @@ class MainActivity : AppCompatActivity() {
 
             val mediaItem = MediaItem.Builder()
                 .setUri(track.url)
+                .setMediaId(track.stableKey)
                 .setMediaMetadata(metadata)
                 .build()
 
@@ -474,19 +488,19 @@ class MainActivity : AppCompatActivity() {
         // (preserves the behaviour that existed before lastActiveUrl was stored).
         // Positions for other tracks with saved data are restored individually
         // by onMediaItemTransition as the player advances to each one.
-        val lastUrl = PositionStore.lastActiveUrl(applicationContext)
+        val lastKey = PositionStore.lastActiveUrl(applicationContext)
         val startIndex: Int? = when {
-            lastUrl != null -> {
-                val idx = playlist.indexOfFirst { it.url == lastUrl }
-                if (idx >= 0 && PositionStore.savedPosition(applicationContext, playlist[idx].url) > 0)
+            lastKey != null -> {
+                val idx = playlist.indexOfFirst { it.stableKey == lastKey }
+                if (idx >= 0 && PositionStore.savedPosition(applicationContext, playlist[idx].stableKey) > 0)
                     idx
                 else
-                    playlist.indexOfLast { PositionStore.savedPosition(applicationContext, it.url) > 0 }.takeIf { it >= 0 }
+                    playlist.indexOfLast { PositionStore.savedPosition(applicationContext, it.stableKey) > 0 }.takeIf { it >= 0 }
             }
-            else -> playlist.indexOfLast { PositionStore.savedPosition(applicationContext, it.url) > 0 }.takeIf { it >= 0 }
+            else -> playlist.indexOfLast { PositionStore.savedPosition(applicationContext, it.stableKey) > 0 }.takeIf { it >= 0 }
         }
         if (startIndex != null) {
-            val savedPos = PositionStore.savedPosition(applicationContext, playlist[startIndex].url)
+            val savedPos = PositionStore.savedPosition(applicationContext, playlist[startIndex].stableKey)
             Log.d(TAG, "setPlaylist restore: index=$startIndex pos=${savedPos}ms")
             playerView.player?.seekTo(startIndex, savedPos)
         }
@@ -501,7 +515,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun pushAllSavedProgress() {
         playlist.forEach { track ->
-            val savedPos = PositionStore.savedPosition(applicationContext, track.url)
+            val savedPos = PositionStore.savedPosition(applicationContext, track.stableKey)
             val progress = if (savedPos > 0)
                 ((savedPos.toFloat() / ASSUMED_DURATION_MS) * 1000).toInt().coerceIn(1, 1000)
             else 0

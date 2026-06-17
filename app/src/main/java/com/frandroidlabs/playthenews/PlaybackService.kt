@@ -21,11 +21,12 @@ class PlaybackService : MediaSessionService() {
         override fun run() {
             val player = mediaSession?.player
             if (player != null && player.isPlaying) {
-                val url = player.currentMediaItem?.localConfiguration?.uri?.toString()
+                val key = player.currentMediaItem?.mediaId?.takeIf { it.isNotBlank() }
+                    ?: player.currentMediaItem?.localConfiguration?.uri?.toString()
                 val pos = player.currentPosition
-                if (url != null && pos > 0) {
-                    PositionStore.savePosition(this@PlaybackService, url, pos)
-                    PositionStore.saveLastActiveUrl(this@PlaybackService, url)
+                if (key != null && pos > 0) {
+                    PositionStore.savePosition(this@PlaybackService, key, pos)
+                    PositionStore.saveLastActiveUrl(this@PlaybackService, key)
                 }
             }
             handler.postDelayed(this, 1000)
@@ -46,10 +47,11 @@ class PlaybackService : MediaSessionService() {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (!isPlaying) {
                     val p = mediaSession?.player ?: return
-                    val url = p.currentMediaItem?.localConfiguration?.uri?.toString()
+                    val key = p.currentMediaItem?.mediaId?.takeIf { it.isNotBlank() }
+                        ?: p.currentMediaItem?.localConfiguration?.uri?.toString()
                     val pos = p.currentPosition
-                    if (url != null && pos > 0) {
-                        PositionStore.savePosition(this@PlaybackService, url, pos)
+                    if (key != null && pos > 0) {
+                        PositionStore.savePosition(this@PlaybackService, key, pos)
                     }
                 }
             }
