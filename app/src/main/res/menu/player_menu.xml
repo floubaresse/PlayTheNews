@@ -18,6 +18,10 @@
         android:title="About"
         app:showAsAction="never" />
     <item
+        android:id="@+id/action_why_new"
+        android:title="Why is this new?"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_load_opml"
         android:icon="@android:drawable/ic_menu_upload"
         android:title="Load OPML"

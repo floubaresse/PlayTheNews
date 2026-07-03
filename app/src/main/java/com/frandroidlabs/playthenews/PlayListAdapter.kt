@@ -26,7 +26,8 @@ class PlaylistAdapter(
     private var isEditMode = false
     private var touchHelper: ItemTouchHelper? = null
 
-    // Progress values (0–1000) keyed by track URL so they survive reorders.
+    // Progress values (0–1000) keyed by track stable key so they survive reorders
+    // and remain aligned with persisted resume positions.
     // 0 means no saved position → bar hidden. >0 shows the bar.
     private val progressMap = mutableMapOf<String, Int>()
 
@@ -51,7 +52,7 @@ class PlaylistAdapter(
 
     override fun onBindViewHolder(holder: TrackViewHolder, position: Int) {
         val track = tracks[position]
-        val progress = progressMap[track.url] ?: 0
+        val progress = progressMap[track.stableKey] ?: 0
         holder.bind(
             track,
             isPlaying = (position == currentlyPlayingIndex),
@@ -90,16 +91,16 @@ class PlaylistAdapter(
     }
 
     /**
-     * Update the progress bar for a single track identified by URL.
+     * Update the progress bar for a single track identified by stable key.
      * [progressValue] is in the range 0–1000 (per ProgressBar max).
      * Pass 0 to hide the bar.
      * Only triggers a rebind if the value actually changed.
      */
-    fun setTrackProgress(url: String, progressValue: Int) {
-        val old = progressMap[url] ?: 0
+    fun setTrackProgress(stableKey: String, progressValue: Int) {
+        val old = progressMap[stableKey] ?: 0
         if (old == progressValue) return
-        progressMap[url] = progressValue
-        val idx = tracks.indexOfFirst { it.url == url }
+        progressMap[stableKey] = progressValue
+        val idx = tracks.indexOfFirst { it.stableKey == stableKey }
         if (idx != -1) notifyItemChanged(idx)
     }
 

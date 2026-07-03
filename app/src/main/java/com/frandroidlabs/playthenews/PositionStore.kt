@@ -29,4 +29,13 @@ object PositionStore {
         context.applicationContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_LAST_ACTIVE_URL, null)
+
+    fun clearAllSavedPositions(context: Context) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val keysToRemove = prefs.all.keys.filter { it.startsWith("pos:") || it == KEY_LAST_ACTIVE_URL }
+        if (keysToRemove.isEmpty()) return
+        prefs.edit {
+            keysToRemove.forEach { remove(it) }
+        }
+    }
 }

@@ -4,6 +4,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import android.content.ComponentName
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 
 import org.xmlpull.v1.XmlPullParser
@@ -17,6 +19,7 @@ import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.edit
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -34,6 +37,8 @@ import com.google.common.util.concurrent.MoreExecutors
 import androidx.media3.common.MediaMetadata
 import androidx.core.net.toUri
 import kotlinx.coroutines.sync.withPermit
+import java.text.DateFormat
+import java.util.Date
 
 
 data class Track(
@@ -193,11 +198,17 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var isPlaylistInitialized = false
     private var isEditMode = false
+    private var forcedStartIndexOnNextPlaylistSet: Int? = null
 
     // See playFromTrack() / onMediaItemTransition for why this flag exists
     private var positionAlreadyRestored = false
 
     private val ASSUMED_DURATION_MS = 60 * 60 * 1000L // 60 min fallback
+
+    private data class EpisodeChangeOutcome(
+        val firstNewIndex: Int?,
+        val changedFeeds: Int
+    )
 
     // -------------------------------------------------------------------------
     // Playback position persistence
@@ -425,7 +436,7 @@ class MainActivity : AppCompatActivity() {
                     val posMs = p.currentPosition
                     val durMs = p.duration.takeIf { it > 0 } ?: ASSUMED_DURATION_MS
                     val progress = ((posMs.toFloat() / durMs) * 1000).toInt().coerceIn(0, 1000)
-                    playlistAdapter.setTrackProgress(playlist[currentItemIndex].url, progress)
+                    playlistAdapter.setTrackProgress(playlist[currentItemIndex].stableKey, progress)
                 }
 
                 if (p.isPlaying) saveCurrentPosition()
@@ -482,6 +493,25 @@ class MainActivity : AppCompatActivity() {
 
         playerView.player?.prepare()
 
+        val forcedStartIndex = forcedStartIndexOnNextPlaylistSet
+        if (forcedStartIndex != null && forcedStartIndex in playlist.indices) {
+            playerView.player?.seekTo(forcedStartIndex, 0L)
+            val forcedTrack = playlist[forcedStartIndex]
+            val feedUrl = forcedTrack.feed?.xmlUrl
+            val event = feedUrl?.let { EpisodeDecisionStore.lastDecisionForFeed(applicationContext, it) }
+            Log.i(
+                TAG,
+                "NEW_EPISODE_PLAY: feed=${forcedTrack.feed?.title ?: "unknown"} " +
+                    "old=${event?.oldEpisode?.title ?: "(none)"} " +
+                    "new=${event?.newEpisode?.title ?: forcedTrack.title} " +
+                    "reason=${event?.reason ?: "forced_start"}"
+            )
+            forcedStartIndexOnNextPlaylistSet = null
+            currentTrackIndex = null
+            playlistAdapter.setCurrentlyPlayingIndex(null)
+            return
+        }
+
         // Seek once to the correct starting track. Using lastActiveUrl we can
         // pinpoint the track the user was on when the app last stopped; the
         // fallback is the last track in the list that has any saved position
@@ -519,12 +549,136 @@ class MainActivity : AppCompatActivity() {
             val progress = if (savedPos > 0)
                 ((savedPos.toFloat() / ASSUMED_DURATION_MS) * 1000).toInt().coerceIn(1, 1000)
             else 0
-            playlistAdapter.setTrackProgress(track.url, progress)
+            playlistAdapter.setTrackProgress(track.stableKey, progress)
         }
+    }
+
+    private fun normalizedTitle(input: String): String =
+        input.lowercase().replace("[^a-z0-9]+".toRegex(), " ").trim()
+
+    private fun likelySameEpisodeTitle(oldTitle: String, newTitle: String): Boolean {
+        val oldNorm = normalizedTitle(oldTitle)
+        val newNorm = normalizedTitle(newTitle)
+        if (oldNorm.isBlank() || newNorm.isBlank()) return false
+        return oldNorm == newNorm ||
+            (oldNorm.length > 10 && newNorm.contains(oldNorm)) ||
+            (newNorm.length > 10 && oldNorm.contains(newNorm))
+    }
+
+    private fun computeEpisodeChanges(loadedPlaylist: List<Track>): EpisodeChangeOutcome {
+        var firstNewIndex: Int? = null
+        var changedFeeds = 0
+
+        loadedPlaylist.forEachIndexed { index, track ->
+            val feed = track.feed ?: return@forEachIndexed
+            val oldSnapshot = EpisodeDecisionStore.latestSnapshot(applicationContext, feed.xmlUrl)
+            val newSnapshot = EpisodeDecisionStore.EpisodeSnapshot(
+                title = track.title,
+                guid = track.guid,
+                url = track.url,
+                stableKey = track.stableKey
+            )
+
+            val (decision, reason) = when {
+                oldSnapshot == null -> "UNCHANGED" to "no_previous_snapshot"
+                oldSnapshot.stableKey == newSnapshot.stableKey -> "UNCHANGED" to "stable_key_same"
+                likelySameEpisodeTitle(oldSnapshot.title, newSnapshot.title) ->
+                    "SUSPECT_FALSE_NEW" to "title_looks_same_but_key_changed"
+                !oldSnapshot.guid.isNullOrBlank() && !newSnapshot.guid.isNullOrBlank() ->
+                    "NEW_EPISODE" to "guid_changed"
+                else -> "NEW_EPISODE" to "fallback_key_changed"
+            }
+
+            if (decision != "UNCHANGED") {
+                changedFeeds += 1
+                if (firstNewIndex == null) firstNewIndex = index
+                Log.i(
+                    TAG,
+                    "EPISODE_DECISION: feed=${feed.xmlUrl} decision=$decision reason=$reason " +
+                        "oldTitle=${oldSnapshot?.title ?: "(none)"} oldGuid=${oldSnapshot?.guid ?: ""} oldUrl=${oldSnapshot?.url ?: ""} " +
+                        "newTitle=${newSnapshot.title} newGuid=${newSnapshot.guid ?: ""} newUrl=${newSnapshot.url}"
+                )
+            }
+
+            EpisodeDecisionStore.appendDecision(
+                applicationContext,
+                EpisodeDecisionStore.DecisionEvent(
+                    timestampMs = System.currentTimeMillis(),
+                    feedXmlUrl = feed.xmlUrl,
+                    feedTitle = feed.title,
+                    decision = decision,
+                    reason = reason,
+                    oldEpisode = oldSnapshot,
+                    newEpisode = newSnapshot
+                )
+            )
+            EpisodeDecisionStore.saveLatestSnapshot(applicationContext, feed.xmlUrl, newSnapshot)
+        }
+
+        return EpisodeChangeOutcome(firstNewIndex = firstNewIndex, changedFeeds = changedFeeds)
+    }
+
+    private fun copyToClipboard(label: String, text: String) {
+        val clipboard = getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+    }
+
+    private fun showWhyThisIsNewDialog() {
+        val idx = playerView.player?.currentMediaItemIndex ?: currentTrackIndex
+        if (idx == null || idx !in playlist.indices) {
+            Toast.makeText(this, "No active episode", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val track = playlist[idx]
+        val feed = track.feed
+        if (feed == null) {
+            Toast.makeText(this, "No feed metadata for this track", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val event = EpisodeDecisionStore.lastDecisionForFeed(applicationContext, feed.xmlUrl)
+        if (event == null) {
+            Toast.makeText(this, "No decision history for this feed yet", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val formattedTime = DateFormat.getDateTimeInstance().format(Date(event.timestampMs))
+        val details = buildString {
+            append("Feed: ${event.feedTitle}\n")
+            append("Decision: ${event.decision}\n")
+            append("Reason: ${event.reason}\n")
+            append("When: $formattedTime\n\n")
+            append("Previous episode:\n")
+            append("- Title: ${event.oldEpisode?.title ?: "(none)"}\n")
+            append("- Guid: ${event.oldEpisode?.guid ?: "(none)"}\n")
+            append("- Url: ${event.oldEpisode?.url ?: "(none)"}\n")
+            append("- Key: ${event.oldEpisode?.stableKey ?: "(none)"}\n\n")
+            append("Current latest episode:\n")
+            append("- Title: ${event.newEpisode?.title ?: track.title}\n")
+            append("- Guid: ${event.newEpisode?.guid ?: "(none)"}\n")
+            append("- Url: ${event.newEpisode?.url ?: track.url}\n")
+            append("- Key: ${event.newEpisode?.stableKey ?: track.stableKey}")
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Why is this considered new?")
+            .setMessage(details)
+            .setPositiveButton(android.R.string.ok, null)
+            .setNeutralButton("Copy") { _, _ ->
+                copyToClipboard("episode-decision", details)
+                Toast.makeText(this, "Decision details copied", Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     private fun updateList(opmlContent: String) {
         loadPlaylistFromOpml(opmlContent) { loadedPlaylist ->
+            val outcome = computeEpisodeChanges(loadedPlaylist)
+            if (outcome.firstNewIndex != null) {
+                PositionStore.clearAllSavedPositions(applicationContext)
+                forcedStartIndexOnNextPlaylistSet = outcome.firstNewIndex
+                Log.i(TAG, "NEW_EPISODE_POLICY: changedFeeds=${outcome.changedFeeds} startIndex=${outcome.firstNewIndex} old_progress_cleared=true")
+            }
+
             playlist.clear()
             playlist.addAll(loadedPlaylist)
             playlistAdapter.updateTracks(playlist)
@@ -581,6 +735,7 @@ class MainActivity : AppCompatActivity() {
             R.id.action_search    -> {
                 searchResultLauncher.launch(Intent(this, SearchActivity::class.java)); true
             }
+            R.id.action_why_new   -> { showWhyThisIsNewDialog(); true }
             R.id.action_edit      -> { toggleEditMode(); invalidateOptionsMenu(); true }
             R.id.action_about     -> {
                 startActivity(Intent(Intent.ACTION_VIEW,
