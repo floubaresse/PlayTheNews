@@ -326,7 +326,15 @@ class MainActivity : AppCompatActivity() {
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                     runOnUiThread {
                         val newIndex = playerView.player?.currentMediaItemIndex
-                        Log.d(TAG, "onMediaItemTransition: newIndex=$newIndex reason=$reason positionAlreadyRestored=$positionAlreadyRestored")
+                        val reasonName = when (reason) {
+                            Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT           -> "REPEAT"
+                            Player.MEDIA_ITEM_TRANSITION_REASON_AUTO             -> "AUTO"
+                            Player.MEDIA_ITEM_TRANSITION_REASON_SEEK             -> "SEEK"
+                            Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED -> "PLAYLIST_CHANGED"
+                            else                                                 -> "UNKNOWN($reason)"
+                        }
+                        Log.d(TAG, "onMediaItemTransition: newIndex=$newIndex reason=$reasonName positionAlreadyRestored=$positionAlreadyRestored")
+
                         if (newIndex != null && newIndex != currentTrackIndex) {
                             // Do not call saveCurrentPosition() here: by the time this
                             // callback fires the player has already moved to newIndex, so
@@ -337,13 +345,40 @@ class MainActivity : AppCompatActivity() {
                             playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
                             updateTitleAndButtons()
                         }
-                        if (positionAlreadyRestored) {
-                            positionAlreadyRestored = false
-                        } else if (newIndex != null && newIndex in playlist.indices) {
-                            val savedPos = PositionStore.savedPosition(applicationContext, playlist[newIndex].stableKey)
-                            if (savedPos > 0) {
-                                Log.d(TAG, "onMediaItemTransition restore: index=$newIndex pos=${savedPos}ms")
-                                playerView.player?.seekTo(savedPos)
+
+                        when {
+                            // Our own code (setPlaylist / playFromTrack) explicitly seeked —
+                            // the position was already set correctly, skip the restore.
+                            positionAlreadyRestored -> {
+                                positionAlreadyRestored = false
+                                Log.d(TAG, "onMediaItemTransition: skipping restore (positionAlreadyRestored was true)")
+                            }
+
+                            // PLAYLIST_CHANGED fires when clearMediaItems/addMediaItem rebuilds
+                            // the queue.  setPlaylist's own seekTo handles the correct position;
+                            // restoring here would race with that explicit seek.
+                            reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED -> {
+                                Log.d(TAG, "onMediaItemTransition: skipping restore for PLAYLIST_CHANGED")
+                            }
+
+                            // AUTO: player naturally advanced to the next track.
+                            // SEEK: user seeked to a different track externally (notification /
+                            //        lock-screen controls) — restore their saved position for
+                            //        that track so they resume where they left off.
+                            (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
+                             reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) &&
+                            newIndex != null && newIndex in playlist.indices -> {
+                                val savedPos = PositionStore.savedPosition(
+                                    applicationContext, playlist[newIndex].stableKey)
+                                if (savedPos > 0) {
+                                    Log.d(TAG, "onMediaItemTransition: restore index=$newIndex pos=${savedPos}ms reason=$reasonName")
+                                    // Use the two-arg overload so the target item is unambiguous,
+                                    // not whatever currentMediaItemIndex happens to be when the
+                                    // MediaController command is later processed.
+                                    playerView.player?.seekTo(newIndex, savedPos)
+                                } else {
+                                    Log.d(TAG, "onMediaItemTransition: no saved pos for index=$newIndex, starting from 0")
+                                }
                             }
                         }
                     }
@@ -470,6 +505,10 @@ class MainActivity : AppCompatActivity() {
     // -------------------------------------------------------------------------
 
     fun setPlaylist() {
+        // Capture the current position BEFORE clearing the queue so we never lose
+        // more than a fraction of a second of playback progress during a rebuild.
+        saveCurrentPosition()
+
         playerView.player?.clearMediaItems()
 
         playlist.forEach { track ->
@@ -531,8 +570,11 @@ class MainActivity : AppCompatActivity() {
         }
         if (startIndex != null) {
             val savedPos = PositionStore.savedPosition(applicationContext, playlist[startIndex].stableKey)
-            Log.d(TAG, "setPlaylist restore: index=$startIndex pos=${savedPos}ms")
+            Log.d(TAG, "setPlaylist restore: index=$startIndex pos=${savedPos}ms key=${playlist[startIndex].stableKey}")
+            positionAlreadyRestored = true   // prevent onMediaItemTransition from double-seeking
             playerView.player?.seekTo(startIndex, savedPos)
+        } else {
+            Log.d(TAG, "setPlaylist: no saved position found, starting from beginning")
         }
 
         currentTrackIndex = null
@@ -623,6 +665,15 @@ class MainActivity : AppCompatActivity() {
         clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
     }
 
+    private fun formatMs(ms: Long): String {
+        if (ms <= 0L) return "(none)"
+        val totalSec = ms / 1000
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
+        val s = totalSec % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+    }
+
     private fun showWhyThisIsNewDialog() {
         val idx = playerView.player?.currentMediaItemIndex ?: currentTrackIndex
         if (idx == null || idx !in playlist.indices) {
@@ -636,36 +687,72 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val event = EpisodeDecisionStore.lastDecisionForFeed(applicationContext, feed.xmlUrl)
-        if (event == null) {
-            Toast.makeText(this, "No decision history for this feed yet", Toast.LENGTH_SHORT).show()
-            return
+
+        // --- position diagnostics ---
+        val savedPos    = PositionStore.savedPosition(applicationContext, track.stableKey)
+        val currentPos  = playerView.player?.currentPosition ?: -1L
+        val lastActive  = PositionStore.lastActiveUrl(applicationContext)
+        val keyMatchesLastActive = (lastActive == track.stableKey)
+
+        val formattedTime = event?.let { DateFormat.getDateTimeInstance().format(Date(it.timestampMs)) } ?: "(never)"
+
+        val dialogTitle = when (event?.decision) {
+            "NEW_EPISODE"      -> "Episode info — NEW episode detected"
+            "SUSPECT_FALSE_NEW"-> "Episode info — Suspicious change (key differs, title same)"
+            "UNCHANGED"        -> "Episode info — UNCHANGED (resume expected)"
+            else               -> "Episode info"
         }
 
-        val formattedTime = DateFormat.getDateTimeInstance().format(Date(event.timestampMs))
         val details = buildString {
-            append("Feed: ${event.feedTitle}\n")
-            append("Decision: ${event.decision}\n")
-            append("Reason: ${event.reason}\n")
-            append("When: $formattedTime\n\n")
-            append("Previous episode:\n")
-            append("- Title: ${event.oldEpisode?.title ?: "(none)"}\n")
-            append("- Guid: ${event.oldEpisode?.guid ?: "(none)"}\n")
-            append("- Url: ${event.oldEpisode?.url ?: "(none)"}\n")
-            append("- Key: ${event.oldEpisode?.stableKey ?: "(none)"}\n\n")
-            append("Current latest episode:\n")
-            append("- Title: ${event.newEpisode?.title ?: track.title}\n")
-            append("- Guid: ${event.newEpisode?.guid ?: "(none)"}\n")
-            append("- Url: ${event.newEpisode?.url ?: track.url}\n")
-            append("- Key: ${event.newEpisode?.stableKey ?: track.stableKey}")
+            // ── playback position section ──────────────────────────────────────
+            append("═══ PLAYBACK POSITION ═══\n")
+            append("Current player position : ${formatMs(currentPos)}\n")
+            append("Saved position (store)  : ${formatMs(savedPos)}\n")
+            append("lastActiveUrl = this?   : $keyMatchesLastActive\n")
+            if (!keyMatchesLastActive && lastActive != null) {
+                append("lastActiveUrl key       : $lastActive\n")
+            }
+            append("\n")
+
+            // ── track identity ────────────────────────────────────────────────
+            append("═══ CURRENT TRACK ═══\n")
+            append("Title     : ${track.title}\n")
+            append("StableKey : ${track.stableKey}\n")
+            append("Guid      : ${track.guid ?: "(none)"}\n")
+            append("Url       : ${track.url}\n")
+            append("\n")
+
+            // ── episode decision section ──────────────────────────────────────
+            if (event != null) {
+                append("═══ EPISODE DECISION ═══\n")
+                append("Feed     : ${event.feedTitle}\n")
+                append("Decision : ${event.decision}\n")
+                append("Reason   : ${event.reason}\n")
+                append("When     : $formattedTime\n\n")
+                append("Previous episode:\n")
+                append("- Title : ${event.oldEpisode?.title ?: "(none)"}\n")
+                append("- Guid  : ${event.oldEpisode?.guid ?: "(none)"}\n")
+                append("- Url   : ${event.oldEpisode?.url ?: "(none)"}\n")
+                append("- Key   : ${event.oldEpisode?.stableKey ?: "(none)"}\n\n")
+                append("Latest in feed:\n")
+                append("- Title : ${event.newEpisode?.title ?: track.title}\n")
+                append("- Guid  : ${event.newEpisode?.guid ?: "(none)"}\n")
+                append("- Url   : ${event.newEpisode?.url ?: track.url}\n")
+                append("- Key   : ${event.newEpisode?.stableKey ?: track.stableKey}")
+            } else {
+                append("═══ EPISODE DECISION ═══\n")
+                append("No decision recorded yet for this feed.\n")
+                append("(Will be recorded on next refresh.)")
+            }
         }
 
         AlertDialog.Builder(this)
-            .setTitle("Why is this considered new?")
+            .setTitle(dialogTitle)
             .setMessage(details)
             .setPositiveButton(android.R.string.ok, null)
             .setNeutralButton("Copy") { _, _ ->
                 copyToClipboard("episode-decision", details)
-                Toast.makeText(this, "Decision details copied", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Episode info copied", Toast.LENGTH_SHORT).show()
             }
             .show()
     }

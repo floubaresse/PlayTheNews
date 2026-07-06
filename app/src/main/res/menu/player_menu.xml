@@ -19,7 +19,7 @@
         app:showAsAction="never" />
     <item
         android:id="@+id/action_why_new"
-        android:title="Why is this new?"
+        android:title="Episode info / Debug"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_load_opml"
