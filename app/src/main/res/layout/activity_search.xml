@@ -25,7 +25,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
-        android:text="Search for podcasts above"
+        android:text="@string/search_empty_state"
         android:textSize="16sp"
         android:textColor="?android:textColorSecondary"
         android:visibility="gone" />

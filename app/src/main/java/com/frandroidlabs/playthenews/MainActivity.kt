@@ -185,7 +185,12 @@ fun loadPlaylistFromOpml(opml: String, callback: (List<Track>) -> Unit) {
 @UnstableApi
 class MainActivity : AppCompatActivity() {
 
-    private val TAG = "PlayTheNews"
+    companion object {
+        private const val TAG = "PlayTheNews"
+        private const val ASSUMED_DURATION_MS = 60 * 60 * 1000L // 60 min fallback
+        private const val OPML_MIME = "*/*"
+    }
+
     private val playlist = mutableListOf<Track>()
 
     private lateinit var urlRecyclerView: RecyclerView
@@ -203,7 +208,6 @@ class MainActivity : AppCompatActivity() {
     // See playFromTrack() / onMediaItemTransition for why this flag exists
     private var positionAlreadyRestored = false
 
-    private val ASSUMED_DURATION_MS = 60 * 60 * 1000L // 60 min fallback
 
     private data class EpisodeChangeOutcome(
         val firstNewIndex: Int?,
@@ -241,7 +245,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    val OPML_MIME = "*/*"
     val pickOpmlLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         uri?.let {
             val content = readOpmlFromUri(it)

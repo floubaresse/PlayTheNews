@@ -5,4 +5,20 @@
     <string name="menu_about">About</string>
     <string name="menu_episode_info">Episode info / Debug</string>
     <string name="menu_load_opml">Load OPML</string>
+    <string name="menu_add_selected">Add Selected</string>
+    <string name="search_title">Search Podcasts</string>
+    <string name="search_query_hint">Search podcasts…</string>
+    <string name="search_empty_state">Search for podcasts above</string>
+    <string name="search_no_results">No results found</string>
+    <string name="search_failed">Search failed: %1$s</string>
+    <string name="search_no_selection">No podcasts selected</string>
+    <plurals name="podcasts_added">
+        <item quantity="one">Added %d podcast</item>
+        <item quantity="other">Added %d podcasts</item>
+    </plurals>
+    <string name="podcast_artwork">Podcast artwork</string>
+    <string name="podcast_icon">Podcast icon</string>
+    <string name="drag_to_reorder">Drag to reorder</string>
+    <string name="currently_playing">Currently playing</string>
+    <string name="unknown_author">Unknown Author</string>
 </resources>

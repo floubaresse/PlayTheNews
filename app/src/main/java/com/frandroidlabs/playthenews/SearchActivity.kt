@@ -1,7 +1,5 @@
 package com.frandroidlabs.playthenews
 
-import android.app.Activity
-import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.view.Menu
@@ -17,6 +15,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import java.nio.charset.StandardCharsets
 import java.net.URL
 import java.net.URLEncoder
 
@@ -28,7 +27,11 @@ data class PodcastSearchResult(
 )
 
 class SearchActivity : AppCompatActivity() {
-    private val TAG = "SearchActivity"
+
+    companion object {
+        private const val TAG = "SearchActivity"
+    }
+
     private lateinit var searchView: SearchView
     private lateinit var recyclerView: RecyclerView
     private lateinit var progressBar: ProgressBar
@@ -42,7 +45,7 @@ class SearchActivity : AppCompatActivity() {
         setContentView(R.layout.activity_search)
 
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        supportActionBar?.title = "Search Podcasts"
+        supportActionBar?.setTitle(R.string.search_title)
 
         recyclerView = findViewById(R.id.searchRecyclerView)
         progressBar = findViewById(R.id.searchProgressBar)
@@ -72,7 +75,7 @@ class SearchActivity : AppCompatActivity() {
 
         val searchItem = menu.findItem(R.id.action_search)
         searchView = searchItem.actionView as SearchView
-        searchView.queryHint = "Search podcasts..."
+        searchView.queryHint = getString(R.string.search_query_hint)
         searchView.maxWidth = Integer.MAX_VALUE
 
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
@@ -125,19 +128,23 @@ class SearchActivity : AppCompatActivity() {
                 searchAdapter.notifyDataSetChanged()
 
                 if (results.isEmpty()) {
-                    Toast.makeText(this@SearchActivity, "No results found", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@SearchActivity, R.string.search_no_results, Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Search error", e)
-                Toast.makeText(this@SearchActivity, "Search failed: ${e.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this@SearchActivity,
+                    getString(R.string.search_failed, e.message ?: e.javaClass.simpleName),
+                    Toast.LENGTH_LONG
+                ).show()
             } finally {
                 progressBar.visibility = View.GONE
             }
         }
     }
 
-    private suspend fun performSearch(query: String): List<PodcastSearchResult> {
-        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+    private fun performSearch(query: String): List<PodcastSearchResult> {
+        val encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.name())
         val urlString = "https://itunes.apple.com/search?media=podcast&limit=50&term=$encodedQuery"
 
         val url = URL(urlString)
@@ -170,11 +177,11 @@ class SearchActivity : AppCompatActivity() {
 
     private fun addSelectedPodcasts() {
         if (selectedPodcasts.isEmpty()) {
-            Toast.makeText(this, "No podcasts selected", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, R.string.search_no_selection, Toast.LENGTH_SHORT).show()
             return
         }
 
-        val prefs = applicationContext.getSharedPreferences("prefs", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences("prefs", MODE_PRIVATE)
         val currentOpml = prefs.getString("opml", null) ?: run {
             // Load default OPML if none exists
             assets.open("subscriptions.opml").bufferedReader().use { it.readText() }
@@ -187,7 +194,11 @@ class SearchActivity : AppCompatActivity() {
         }
 
         hasChanges = true
-        Toast.makeText(this, "Added ${selectedPodcasts.size} podcast(s)", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            this,
+            resources.getQuantityString(R.plurals.podcasts_added, selectedPodcasts.size, selectedPodcasts.size),
+            Toast.LENGTH_SHORT
+        ).show()
 
         finishWithResult()
     }
@@ -218,7 +229,7 @@ class SearchActivity : AppCompatActivity() {
 
     private fun finishWithResult() {
         if (hasChanges) {
-            setResult(Activity.RESULT_OK)
+            setResult(RESULT_OK)
         }
         finish()
     }

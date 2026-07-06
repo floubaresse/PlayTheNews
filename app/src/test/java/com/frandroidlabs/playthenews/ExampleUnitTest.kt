@@ -1,4 +1,4 @@
-package com.example.playthenews
+package com.frandroidlabs.playthenews
 
 import org.junit.Test
 

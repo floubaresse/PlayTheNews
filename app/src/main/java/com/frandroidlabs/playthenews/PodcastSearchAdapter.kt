@@ -32,7 +32,7 @@ class PodcastSearchAdapter(
         val podcast = podcasts[position]
 
         holder.titleTextView.text = podcast.title
-        holder.authorTextView.text = podcast.author ?: "Unknown Author"
+        holder.authorTextView.text = podcast.author ?: holder.itemView.context.getString(R.string.unknown_author)
 
         // Load artwork
         if (podcast.artworkUrl != null) {

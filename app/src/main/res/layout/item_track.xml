@@ -13,7 +13,7 @@
         android:layout_gravity="center_vertical"
         android:layout_marginEnd="12dp"
         android:src="@android:drawable/ic_menu_sort_by_size"
-        android:contentDescription="Drag to reorder"
+        android:contentDescription="@string/drag_to_reorder"
         android:visibility="gone" />
 
     <ImageView
@@ -22,7 +22,7 @@
         android:layout_height="48dp"
         android:layout_marginEnd="12dp"
         android:scaleType="centerCrop"
-        android:contentDescription="Podcast icon" />
+        android:contentDescription="@string/podcast_icon" />
 
     <LinearLayout
         android:layout_width="0dp"
@@ -61,7 +61,7 @@
         android:layout_gravity="center_vertical"
         android:layout_marginStart="8dp"
         android:src="@android:drawable/ic_media_play"
-        android:contentDescription="Currently playing"
+        android:contentDescription="@string/currently_playing"
         android:visibility="invisible" />
 
 </LinearLayout>

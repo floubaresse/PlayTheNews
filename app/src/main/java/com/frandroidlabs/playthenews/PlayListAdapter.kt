@@ -2,7 +2,6 @@ package com.frandroidlabs.playthenews
 
 import android.util.Log
 import android.view.LayoutInflater
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
@@ -13,7 +12,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.squareup.picasso.Picasso
 import java.util.Collections
 
-private val TAG = "PlayTheNews"
+private const val TAG = "PlayTheNews"
 
 class PlaylistAdapter(
     private var tracks: MutableList<Track>,
@@ -66,8 +65,8 @@ class PlaylistAdapter(
             }
         }
 
-        holder.dragHandle.setOnTouchListener { _, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN && isEditMode) {
+        holder.dragHandle.setOnLongClickListener {
+            if (isEditMode) {
                 touchHelper?.startDrag(holder)
                 true
             } else {
@@ -81,10 +80,10 @@ class PlaylistAdapter(
         currentlyPlayingIndex = index
         if (previousIndex != index) {
             Log.d(TAG, "setCurrentlyPlayingIndex: previousIndex: $previousIndex, index: $index")
-            if (previousIndex != null && previousIndex != -1 && previousIndex < tracks.size) {
+            if (previousIndex != null && previousIndex in 0 until tracks.size) {
                 notifyItemChanged(previousIndex)
             }
-            if (index != null && index != -1 && index < tracks.size) {
+            if (index != null && index in 0 until tracks.size) {
                 notifyItemChanged(index)
             }
         }
@@ -141,7 +140,7 @@ class PlaylistAdapter(
         onItemDeleted?.invoke(position)
     }
 
-    inner class TrackViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+    class TrackViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         private val titleTextView: TextView = itemView.findViewById(R.id.trackTitle)
         val playingIndicator: ImageView = itemView.findViewById(R.id.playingIndicator)
         private val trackIcon: ImageView = itemView.findViewById(R.id.trackIcon)

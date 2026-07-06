@@ -14,7 +14,7 @@
         android:layout_height="60dp"
         android:layout_marginEnd="12dp"
         android:scaleType="centerCrop"
-        android:contentDescription="Podcast artwork" />
+        android:contentDescription="@string/podcast_artwork" />
 
     <LinearLayout
         android:layout_width="0dp"
