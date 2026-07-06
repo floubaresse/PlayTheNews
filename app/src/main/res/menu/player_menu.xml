@@ -5,26 +5,26 @@
     <item
         android:id="@+id/action_search"
         android:icon="@android:drawable/ic_menu_search"
-        android:title="Search"
+        android:title="@string/menu_search"
         app:showAsAction="ifRoom" />
 
     <item
         android:id="@+id/action_edit"
         android:icon="@android:drawable/ic_menu_edit"
-        android:title="Edit"
+        android:title="@string/menu_edit"
         app:showAsAction="ifRoom" />
     <item
         android:id="@+id/action_about"
-        android:title="About"
+        android:title="@string/menu_about"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_why_new"
-        android:title="Episode info / Debug"
+        android:title="@string/menu_episode_info"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_load_opml"
         android:icon="@android:drawable/ic_menu_upload"
-        android:title="Load OPML"
+        android:title="@string/menu_load_opml"
         app:showAsAction="never" />
 
 </menu>

@@ -660,9 +660,9 @@ class MainActivity : AppCompatActivity() {
         return EpisodeChangeOutcome(firstNewIndex = firstNewIndex, changedFeeds = changedFeeds)
     }
 
-    private fun copyToClipboard(label: String, text: String) {
+    private fun copyToClipboard(text: String) {
         val clipboard = getSystemService(ClipboardManager::class.java)
-        clipboard?.setPrimaryClip(ClipData.newPlainText(label, text))
+        clipboard?.setPrimaryClip(ClipData.newPlainText("episode-decision", text))
     }
 
     private fun formatMs(ms: Long): String {
@@ -751,7 +751,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage(details)
             .setPositiveButton(android.R.string.ok, null)
             .setNeutralButton("Copy") { _, _ ->
-                copyToClipboard("episode-decision", details)
+                copyToClipboard(details)
                 Toast.makeText(this, "Episode info copied", Toast.LENGTH_SHORT).show()
             }
             .show()
