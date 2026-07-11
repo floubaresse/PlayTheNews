@@ -25,8 +25,16 @@ class PlaybackService : MediaSessionService() {
                     ?: player.currentMediaItem?.localConfiguration?.uri?.toString()
                 val pos = player.currentPosition
                 if (key != null && pos > 0) {
-                    PositionStore.savePosition(this@PlaybackService, key, pos)
-                    PositionStore.saveLastActiveUrl(this@PlaybackService, key)
+                    val saved = PositionStore.savePosition(
+                        context = this@PlaybackService,
+                        url = key,
+                        positionMs = pos,
+                        source = "service_periodic",
+                        allowBackward = false
+                    )
+                    if (saved) {
+                        PositionStore.saveLastActiveUrl(this@PlaybackService, key)
+                    }
                 }
             }
             handler.postDelayed(this, 1000)
@@ -51,7 +59,13 @@ class PlaybackService : MediaSessionService() {
                         ?: p.currentMediaItem?.localConfiguration?.uri?.toString()
                     val pos = p.currentPosition
                     if (key != null && pos > 0) {
-                        PositionStore.savePosition(this@PlaybackService, key, pos)
+                        PositionStore.savePosition(
+                            context = this@PlaybackService,
+                            url = key,
+                            positionMs = pos,
+                            source = "service_pause",
+                            allowBackward = false
+                        )
                     }
                 }
             }

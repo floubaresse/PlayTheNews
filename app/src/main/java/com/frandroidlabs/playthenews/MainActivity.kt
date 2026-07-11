@@ -16,6 +16,7 @@ import kotlinx.coroutines.*
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.View
 import android.view.Menu
 import android.view.MenuItem
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,6 +33,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.SessionToken
 import androidx.media3.session.MediaController
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.TimeBar
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import androidx.media3.common.MediaMetadata
@@ -189,6 +191,8 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "PlayTheNews"
         private const val ASSUMED_DURATION_MS = 60 * 60 * 1000L // 60 min fallback
         private const val OPML_MIME = "*/*"
+        private const val EXPLICIT_USER_SEEK_WINDOW_MS = 30_000L
+        private const val INTERNAL_SEEK_WINDOW_MS = 5_000L
     }
 
     private val playlist = mutableListOf<Track>()
@@ -207,27 +211,52 @@ class MainActivity : AppCompatActivity() {
 
     // See playFromTrack() / onMediaItemTransition for why this flag exists
     private var positionAlreadyRestored = false
+    private var explicitUserSeekUntilMs = 0L
+    private var internalSeekUntilMs = 0L
 
 
     private data class EpisodeChangeOutcome(
         val firstNewIndex: Int?,
-        val changedFeeds: Int
+        val newEpisodeFeeds: Int,
+        val keysToClear: Set<String>
     )
 
     // -------------------------------------------------------------------------
     // Playback position persistence
     // -------------------------------------------------------------------------
 
-    private fun saveCurrentPosition() {
+    private fun saveCurrentPosition(source: String = "activity_periodic") {
         val p = playerView.player ?: return
         val idx = p.currentMediaItemIndex
         if (idx in playlist.indices) {
             val key = playlist[idx].stableKey
             val pos = p.currentPosition
-            PositionStore.savePosition(applicationContext, key, pos)
-            PositionStore.saveLastActiveUrl(applicationContext, key)
-            Log.d(TAG, "saveCurrentPosition: $key -> ${pos}ms")
+            val allowBackward = System.currentTimeMillis() <= explicitUserSeekUntilMs
+            val saved = PositionStore.savePosition(
+                context = applicationContext,
+                url = key,
+                positionMs = pos,
+                source = source,
+                allowBackward = allowBackward
+            )
+            if (saved) {
+                PositionStore.saveLastActiveUrl(applicationContext, key)
+            }
+            Log.d(TAG, "saveCurrentPosition: $key -> ${pos}ms source=$source saved=$saved allowBackward=$allowBackward")
         }
+    }
+
+    private fun markExplicitUserSeek(reason: String) {
+        explicitUserSeekUntilMs = System.currentTimeMillis() + EXPLICIT_USER_SEEK_WINDOW_MS
+        Log.d(TAG, "markExplicitUserSeek: reason=$reason until=$explicitUserSeekUntilMs")
+    }
+
+    private fun isInternalSeekInFlight(): Boolean = System.currentTimeMillis() <= internalSeekUntilMs
+
+    private fun performInternalSeek(index: Int, positionMs: Long, reason: String) {
+        internalSeekUntilMs = System.currentTimeMillis() + INTERNAL_SEEK_WINDOW_MS
+        Log.d(TAG, "performInternalSeek: index=$index pos=${positionMs}ms reason=$reason")
+        playerView.player?.seekTo(index, positionMs)
     }
 
     // -------------------------------------------------------------------------
@@ -265,6 +294,21 @@ class MainActivity : AppCompatActivity() {
 
         playerView    = findViewById(R.id.player_view)
         urlRecyclerView = findViewById(R.id.urlRecyclerView)
+
+        // Scrubbing the progress bar is explicit user intent, so temporary backward
+        // saves are allowed after this action.
+        (playerView.findViewById<View>(androidx.media3.ui.R.id.exo_progress) as? TimeBar)
+            ?.addListener(object : TimeBar.OnScrubListener {
+                override fun onScrubStart(timeBar: TimeBar, position: Long) {
+                    markExplicitUserSeek("player_scrub_start")
+                }
+
+                override fun onScrubMove(timeBar: TimeBar, position: Long) = Unit
+
+                override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
+                    if (!canceled) markExplicitUserSeek("player_scrub_stop")
+                }
+            })
 
         playlistAdapter = PlaylistAdapter(
             playlist.toMutableList(),
@@ -371,16 +415,39 @@ class MainActivity : AppCompatActivity() {
                             (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
                              reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) &&
                             newIndex != null && newIndex in playlist.indices -> {
+                                if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK && !isInternalSeekInFlight()) {
+                                    markExplicitUserSeek("external_seek_transition")
+                                }
                                 val savedPos = PositionStore.savedPosition(
                                     applicationContext, playlist[newIndex].stableKey)
                                 if (savedPos > 0) {
                                     Log.d(TAG, "onMediaItemTransition: restore index=$newIndex pos=${savedPos}ms reason=$reasonName")
+                                    PositionStore.recordRestoreAttempt(
+                                        context = applicationContext,
+                                        url = playlist[newIndex].stableKey,
+                                        targetPositionMs = savedPos,
+                                        source = "main_transition_$reasonName",
+                                        accepted = true,
+                                        reason = "saved_position_found"
+                                    )
                                     // Use the two-arg overload so the target item is unambiguous,
                                     // not whatever currentMediaItemIndex happens to be when the
                                     // MediaController command is later processed.
-                                    playerView.player?.seekTo(newIndex, savedPos)
+                                    performInternalSeek(
+                                        index = newIndex,
+                                        positionMs = savedPos,
+                                        reason = "transition_restore_$reasonName"
+                                    )
                                 } else {
                                     Log.d(TAG, "onMediaItemTransition: no saved pos for index=$newIndex, starting from 0")
+                                    PositionStore.recordRestoreAttempt(
+                                        context = applicationContext,
+                                        url = playlist[newIndex].stableKey,
+                                        targetPositionMs = 0L,
+                                        source = "main_transition_$reasonName",
+                                        accepted = false,
+                                        reason = "no_saved_position"
+                                    )
                                 }
                             }
                         }
@@ -420,12 +487,12 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        saveCurrentPosition()
+        saveCurrentPosition("activity_onPause")
     }
 
     override fun onStop() {
         super.onStop()
-        saveCurrentPosition()
+        saveCurrentPosition("activity_onStop")
         handler.removeCallbacksAndMessages(null)
         MediaController.releaseFuture(controllerFuture)
     }
@@ -477,7 +544,7 @@ class MainActivity : AppCompatActivity() {
                     playlistAdapter.setTrackProgress(playlist[currentItemIndex].stableKey, progress)
                 }
 
-                if (p.isPlaying) saveCurrentPosition()
+                if (p.isPlaying) saveCurrentPosition("activity_periodic")
 
                 handler.postDelayed(this, 1000)
             }
@@ -488,6 +555,7 @@ class MainActivity : AppCompatActivity() {
         if (index == null || index !in playlist.indices) return
 
         Log.d(TAG, "playFromTrack: $index")
+        markExplicitUserSeek("playlist_tap")
         currentTrackIndex = index
         playlistAdapter.setCurrentlyPlayingIndex(currentTrackIndex)
 
@@ -495,9 +563,25 @@ class MainActivity : AppCompatActivity() {
         if (savedPos > 0) {
             Log.d(TAG, "playFromTrack: resuming at ${savedPos}ms")
             positionAlreadyRestored = true
-            playerView.player?.seekTo(index, savedPos)
+            PositionStore.recordRestoreAttempt(
+                context = applicationContext,
+                url = playlist[index].stableKey,
+                targetPositionMs = savedPos,
+                source = "main_playFromTrack",
+                accepted = true,
+                reason = "saved_position_found"
+            )
+            performInternalSeek(index, savedPos, "playFromTrack_saved")
         } else {
-            playerView.player?.seekTo(index, 0)
+            PositionStore.recordRestoreAttempt(
+                context = applicationContext,
+                url = playlist[index].stableKey,
+                targetPositionMs = 0L,
+                source = "main_playFromTrack",
+                accepted = false,
+                reason = "no_saved_position"
+            )
+            performInternalSeek(index, 0L, "playFromTrack_start_zero")
         }
 
         playTheNews()
@@ -510,7 +594,7 @@ class MainActivity : AppCompatActivity() {
     fun setPlaylist() {
         // Capture the current position BEFORE clearing the queue so we never lose
         // more than a fraction of a second of playback progress during a rebuild.
-        saveCurrentPosition()
+        saveCurrentPosition("activity_setPlaylist_before_clear")
 
         playerView.player?.clearMediaItems()
 
@@ -537,7 +621,7 @@ class MainActivity : AppCompatActivity() {
 
         val forcedStartIndex = forcedStartIndexOnNextPlaylistSet
         if (forcedStartIndex != null && forcedStartIndex in playlist.indices) {
-            playerView.player?.seekTo(forcedStartIndex, 0L)
+            performInternalSeek(forcedStartIndex, 0L, "forced_new_episode_start")
             val forcedTrack = playlist[forcedStartIndex]
             val feedUrl = forcedTrack.feed?.xmlUrl
             val event = feedUrl?.let { EpisodeDecisionStore.lastDecisionForFeed(applicationContext, it) }
@@ -575,7 +659,15 @@ class MainActivity : AppCompatActivity() {
             val savedPos = PositionStore.savedPosition(applicationContext, playlist[startIndex].stableKey)
             Log.d(TAG, "setPlaylist restore: index=$startIndex pos=${savedPos}ms key=${playlist[startIndex].stableKey}")
             positionAlreadyRestored = true   // prevent onMediaItemTransition from double-seeking
-            playerView.player?.seekTo(startIndex, savedPos)
+            PositionStore.recordRestoreAttempt(
+                context = applicationContext,
+                url = playlist[startIndex].stableKey,
+                targetPositionMs = savedPos,
+                source = "main_setPlaylist",
+                accepted = true,
+                reason = "startup_restore"
+            )
+            performInternalSeek(startIndex, savedPos, "setPlaylist_restore")
         } else {
             Log.d(TAG, "setPlaylist: no saved position found, starting from beginning")
         }
@@ -612,7 +704,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun computeEpisodeChanges(loadedPlaylist: List<Track>): EpisodeChangeOutcome {
         var firstNewIndex: Int? = null
-        var changedFeeds = 0
+        var newEpisodeFeeds = 0
+        val keysToClear = linkedSetOf<String>()
 
         loadedPlaylist.forEachIndexed { index, track ->
             val feed = track.feed ?: return@forEachIndexed
@@ -634,9 +727,11 @@ class MainActivity : AppCompatActivity() {
                 else -> "NEW_EPISODE" to "fallback_key_changed"
             }
 
-            if (decision != "UNCHANGED") {
-                changedFeeds += 1
+            if (decision == "NEW_EPISODE") {
+                newEpisodeFeeds += 1
                 if (firstNewIndex == null) firstNewIndex = index
+                oldSnapshot?.stableKey?.takeIf { it.isNotBlank() }?.let { keysToClear.add(it) }
+                newSnapshot.stableKey.takeIf { it.isNotBlank() }?.let { keysToClear.add(it) }
                 Log.i(
                     TAG,
                     "EPISODE_DECISION: feed=${feed.xmlUrl} decision=$decision reason=$reason " +
@@ -660,7 +755,11 @@ class MainActivity : AppCompatActivity() {
             EpisodeDecisionStore.saveLatestSnapshot(applicationContext, feed.xmlUrl, newSnapshot)
         }
 
-        return EpisodeChangeOutcome(firstNewIndex = firstNewIndex, changedFeeds = changedFeeds)
+        return EpisodeChangeOutcome(
+            firstNewIndex = firstNewIndex,
+            newEpisodeFeeds = newEpisodeFeeds,
+            keysToClear = keysToClear
+        )
     }
 
     private fun copyToClipboard(text: String) {
@@ -715,6 +814,19 @@ class MainActivity : AppCompatActivity() {
             if (!keyMatchesLastActive && lastActive != null) {
                 append("lastActiveUrl key       : $lastActive\n")
             }
+            val recentPositionEvents = PositionStore.recentDebugEvents(
+                context = applicationContext,
+                keyFilter = track.stableKey,
+                limit = 8
+            )
+            if (recentPositionEvents.isNotEmpty()) {
+                append("\nRecent save/restore events:\n")
+                recentPositionEvents.forEach { event ->
+                    val time = DateFormat.getTimeInstance().format(Date(event.timestampMs))
+                    val verdict = if (event.accepted) "ACCEPT" else "BLOCK"
+                    append("- [$time] ${event.type} $verdict src=${event.source} old=${formatMs(event.oldPositionMs)} new=${formatMs(event.newPositionMs)} reason=${event.reason}\n")
+                }
+            }
             append("\n")
 
             // ── track identity ────────────────────────────────────────────────
@@ -763,10 +875,14 @@ class MainActivity : AppCompatActivity() {
     private fun updateList(opmlContent: String) {
         loadPlaylistFromOpml(opmlContent) { loadedPlaylist ->
             val outcome = computeEpisodeChanges(loadedPlaylist)
-            if (outcome.firstNewIndex != null) {
-                PositionStore.clearAllSavedPositions(applicationContext)
+            if (outcome.keysToClear.isNotEmpty() && outcome.firstNewIndex != null) {
+                PositionStore.clearSavedPositionsForKeys(applicationContext, outcome.keysToClear)
                 forcedStartIndexOnNextPlaylistSet = outcome.firstNewIndex
-                Log.i(TAG, "NEW_EPISODE_POLICY: changedFeeds=${outcome.changedFeeds} startIndex=${outcome.firstNewIndex} old_progress_cleared=true")
+                Log.i(
+                    TAG,
+                    "NEW_EPISODE_POLICY: changedFeeds=${outcome.newEpisodeFeeds} " +
+                        "startIndex=${outcome.firstNewIndex} clearedKeys=${outcome.keysToClear.size}"
+                )
             }
 
             playlist.clear()
